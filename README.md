@@ -1,28 +1,31 @@
-# pr-autoreview
+# Goblin
 
-Auto **brutal review** of every new teammate PR on `Hivebrite/hivebrite-mobile`, posted as a PR comment — plus a live local dashboard.
+Local dev cockpit on `http://localhost:4317` (127.0.0.1 only, zero dependencies, Node 24 + built-in SQLite). Inspired by a teammate's Task Goblin.
 
-- `bin/run.sh` — polled by launchd every 5 min. Picks open, non-draft, non-bot PRs not authored by `ejames30` and not in `seen.txt`, checks each out in a detached worktree (`~/HiveBrite/pr-review-wt/pr-N`), runs headless `claude -p` with **read-only** tools against `apps/mobile_app/.claude/commands/brutal-review.md`, posts the result with `gh pr comment`, removes the worktree.
-- `dashboard/` — zero-dependency Node server on `http://localhost:4317` (127.0.0.1 only). Live via SSE: each review's tool calls as Claude makes them, the final comment, cost/duration, poll history, and Run now / Pause / Resume buttons.
-
-## Data (`~/.claude/pr-autoreview/`)
-
-| File | What |
+| Tab | What |
 | --- | --- |
-| `events.jsonl` | one line per step: `poll_start`, `review_start`, `review_done`, `posted`, `dry_run`, `review_failed`, `poll_end` |
-| `runs/<poll>-pr-<N>.stream.jsonl` | raw `claude --output-format stream-json` of one review |
-| `runs/<poll>-pr-<N>.md` | the comment body |
-| `seen.txt` | PR numbers already reviewed — delete a line to re-review |
+| **Tâches** | My Jira issues (when a token is set) ∪ my open PRs, joined by ticket key. Size, checks, conflicts, unresolved threads, review decision, and the **next action** — the first matching *chore*. |
+| **Reviews** | Teammates' open PRs grouped by size (lines changed, not files). **AI review** runs a read-only Claude session and turns its findings into a **pending GitHub review** with inline comments — I edit and submit it myself. |
+| **Sessions** | Every session launched from here: state (Need input = `blocked`), claude.ai link, model/effort, tokens, duration, per-day and per-chore charts. |
+| **Stack** | Detached checkout of any branch/PR in `~/HiveBrite/hivebrite-mobile-stack` + Metro. Refresh pulls new commits → hot reload. Never touches the main clone. |
 
-## Commands
+## How sessions run
+
+`claude --bg --remote-control <name> --model … --effort …` in a **worktree per task** under `<repo>/.claude/worktrees/` (inside the trusted repo, git-ignored). A branch already checked out in another worktree is reused there. State comes from `claude agents --json --all`; the claude.ai link from `claude logs`; tokens from the session transcript.
+
+Chores (`server/chores.mjs`), first match wins: conflicts → failing checks → unresolved comments → self review (Fable) → draft ready for review → start ticket. The modal lets me change model, effort and prompt before launching. **+ Prompt libre** starts a session in a fresh worktree on master.
+
+## Review safety
+
+A teammate's diff is untrusted. The review session runs in `dontAsk` mode with only `Read/Grep/Glob`, `git diff/log/show/blame`, `gh pr view/diff` — no write, no post. It ends with a JSON block; the server creates the pending review.
+
+## Setup
 
 ```bash
-./install.sh                                          # (re)load both launchd agents
-DRY_RUN=1 bin/run.sh 3541                             # review one PR, don't post (shows up in the dashboard)
-tail -f ~/Library/Logs/pr-autoreview.log
-launchctl bootout gui/$(id -u)/com.eric.pr-autoreview # stop polling (or the Pause button)
+./install.sh                     # (re)load the launchd agent com.eric.goblin (KeepAlive)
+tail -f ~/Library/Logs/goblin.log
+# Jira (optional): token from id.atlassian.com, then
+security add-generic-password -s goblin-jira -a eric@hivebrite.com -w <token>
 ```
 
-## Why Claude can't post
-
-The diff is written by someone else and is untrusted (prompt injection). Claude gets `Read/Grep/Glob` + `git diff/log/show/blame` + `gh pr view/diff` only; the script does the posting.
+Data: `~/.claude/pr-autoreview/goblin.db`. Repos, sizes, Jira JQL, stack command: `server/config.mjs`.
