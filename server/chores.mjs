@@ -122,6 +122,19 @@ Plan the Jira epic ${epic.key} — "${epic.summary ?? ''}" (${epic.url}).
 Don't change any file and don't create or edit Jira tickets. Then wait: I'll comment on the plan. Only after my explicit go do you create the missing tickets (under ${epic.key}) or start the first step.`,
 };
 
+// My stand-up, written from what actually happened.
+export const STANDUP = {
+  key: 'standup',
+  label: 'Préparer mon stand-up',
+  model: 'sonnet',
+  effort: 'low',
+  prompt: () => `Prepare my stand-up for today, in French, short (Slack-ready, bullets):
+- **Hier** — PRs I merged, opened or pushed to (gh pr list -R Hivebrite/hivebrite-mobile --author @me --state all --search "updated:>=$(date -v-1d +%F)"), reviews I gave, Jira tickets I moved (Atlassian: assignee = currentUser() AND updated >= -1d).
+- **Aujourd'hui** — what's next on my in-progress tickets and open PRs (failing checks, conflicts, review comments to address).
+- **Blocages** — anything waiting on someone else.
+Read only; don't change anything. End with the message ready to paste.`,
+};
+
 // Several tickets in ONE session: cheaper context than N sessions when they touch the same area.
 export const BATCH = {
   key: 'batch',
@@ -140,7 +153,7 @@ Start by reading every ticket (Atlassian MCP), tell me how you'd group or order 
 /** The chore to suggest for a task, or null. */
 export const nextChore = (task) => CHORES.find((c) => c.when(task)) ?? null;
 
-export const choreByKey = (key) => [...CHORES, CUSTOM, REVIEW_CHORE, AUTO_REVIEW_CHORE, BATCH, EPIC_PLAN].find((c) => c.key === key);
+export const choreByKey = (key) => [...CHORES, CUSTOM, REVIEW_CHORE, AUTO_REVIEW_CHORE, BATCH, EPIC_PLAN, STANDUP].find((c) => c.key === key);
 
 export const MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];

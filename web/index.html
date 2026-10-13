@@ -21,11 +21,15 @@
       <a data-page="jira"><i>◆</i>Jira <span class="count" id="c-jira"></span></a>
       <a data-page="epics"><i>✦</i>Epics &amp; plans <span class="count" id="c-epics"></span></a>
       <div class="navlabel">Équipe</div>
-      <a data-page="reviews"><i>⇄</i>PR à relire <span class="count" id="c-reviews"></span></a>
+      <a data-page="reviews"><i>⇄</i>PR de l'équipe <span class="count" id="c-reviews"></span></a>
+      <a data-page="radar"><i>◉</i>Radar auto-review <span class="dot" id="radarDot"></span></a>
       <a data-page="brutal"><i>⚡</i>Brutal reviews <span class="count" id="c-brutal"></span></a>
+      <a data-page="slack"><i>#</i>Slack filtré <span class="count hot" id="c-slack"></span></a>
       <div class="navlabel">Machine</div>
       <a data-page="sessions"><i>▶</i>Sessions <span class="count" id="c-sessions"></span></a>
+      <a data-page="usage"><i>$</i>Conso IA</a>
       <a data-page="stack"><i>⬢</i>Stack local <span class="dot" id="stackDot"></span></a>
+      <a data-page="data"><i>▦</i>Journal &amp; base</a>
     </nav>
     <div class="side-foot">
       <div class="costbox"><small>Coût est. aujourd'hui</small><b id="costToday">–</b></div>
@@ -38,6 +42,7 @@
     <header class="top">
       <div><h1 id="pageTitle"></h1><div class="muted small" id="pageSub"></div></div>
       <span class="spacer"></span>
+      <button class="ghost" id="paletteBtn" title="Recherche globale">⌘K</button>
       <button class="primary" id="customBtn">＋ Prompt libre</button>
     </header>
     <div id="banner"></div>
@@ -49,6 +54,10 @@
       <section class="page" id="page-reviews"><div class="filters" id="f-reviews"></div><div id="r-reviews"></div></section>
       <section class="page" id="page-brutal"><div class="filters" id="f-brutal"></div><div id="r-brutal"></div></section>
       <section class="page" id="page-sessions"><div class="filters" id="f-sessions"></div><div id="r-sessions"></div></section>
+      <section class="page" id="page-radar"></section>
+      <section class="page" id="page-slack"><div class="filters" id="f-slack"></div><div id="r-slack"></div></section>
+      <section class="page" id="page-usage"><div class="filters" id="f-usage"></div><div id="r-usage"></div></section>
+      <section class="page" id="page-data"><div class="filters" id="f-data"></div><div id="r-data"></div></section>
       <section class="page" id="page-stack"></section>
     </main>
   </div>
@@ -81,6 +90,11 @@
     <textarea id="sText" rows="3" placeholder="Répondre à Claude… (⌘↩ pour envoyer)"></textarea>
     <div class="actions"><span class="muted small" id="sHint"></span><button class="primary" id="sSend">Envoyer</button></div>
   </form>
+</dialog>
+
+<dialog id="palette" class="palette">
+  <input id="pq" placeholder="Aller à… ticket, PR, epic, session, page" autocomplete="off">
+  <div id="pres"></div>
 </dialog>
 
 <div id="selbar"></div>

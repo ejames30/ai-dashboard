@@ -41,11 +41,32 @@ export const config = {
     mcpEveryMs: 30 * 60_000, // ~3 headless Haiku runs ≈ $0.02 per sync; a token makes it free and instant
   },
 
+  // The mobile team: their PRs lead the "PR de l'équipe" page (drafts included).
+  team: [
+    { login: 'Haerezis', name: 'Thomas' },
+    { login: 'malekhassani', name: 'Malek' },
+    { login: 'MarshMallowFR', name: 'Jérémie (MarshMallow)' },
+    { login: 'tobiasz', name: 'Tobiasz' },
+  ],
+
   // New ready PRs from these teammates get a brutal review POSTED automatically (see autoreview.mjs).
   autoReview: {
     enabled: true,
     authors: ['malekhassani', 'MarshMallowFR', 'tobiasz'],
     maxConcurrent: 3,
+  },
+
+  // Slack triage through the claude.ai connector (read-only tools). Work hours only.
+  slack: {
+    enabled: true,
+    me: 'Eric James',
+    userId: 'U03JRNL7WJV',
+    role: 'mobile engineer (React Native) at Hivebrite, mobile squad',
+    groups: ['@mobile', '@mobile-team'],
+    channels: ['#squad-mobile', '#squad-mobile-pr', '#mobile-app-testing-result', '#incidents', '#releases'],
+    model: 'haiku', // "Analyse fine" in the UI runs it with sonnet
+    everyMs: 30 * 60_000,
+    hours: [8, 20],
   },
 
   syncEveryMs: 3 * 60_000,

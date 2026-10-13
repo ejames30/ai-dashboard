@@ -7,11 +7,14 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AUTO_REVIEW_CHORE, BATCH, CHORES, CUSTOM, EFFORTS, EPIC_PLAN, MODELS, REVIEW_CHORE, choreByKey, nextChore } from './chores.mjs';
+import { AUTO_REVIEW_CHORE, BATCH, CHORES, CUSTOM, EFFORTS, EPIC_PLAN, MODELS, REVIEW_CHORE, STANDUP, choreByKey, nextChore } from './chores.mjs';
 import { config, repoBySlug, sizeOf } from './config.mjs';
-import { db, kv, update } from './db.mjs';
+import { db, kv, logEvent, update } from './db.mjs';
 import { autoReviewState, runAutoReview } from './autoreview.mjs';
 import { syncGithub } from './github.mjs';
+import { setSlackStatus, slackItems, syncSlack } from './slack.mjs';
+import { scanUsage, usageStats } from './usage.mjs';
+import { DatabaseSync } from 'node:sqlite';
 import { jiraSource, resetJiraToken, syncJira } from './jira.mjs';
 import { PLAN_TOOLS, launch, listSessions, openInTerminal, pollSessions, postDraftReview, replySession, reviewFromTranscript, stopSession, transcript } from './sessions.mjs';
 import { onStackLog, refreshStack, stackStatus, startStack, stopStack, switchStack } from './stack.mjs';
@@ -22,7 +25,7 @@ const WEB = join(dirname(fileURLToPath(import.meta.url)), '../web');
 // ---- model -----------------------------------------------------------------
 function buildTasks() {
   const issues = db.prepare('SELECT * FROM issues').all();
-  const mine = db.prepare("SELECT * FROM prs WHERE kind = 'mine'").all();
+  const mine = db.prepare("SELECT * FROM prs WHERE kind = 'mine' AND closed_at IS NULL").all();
   const sessions = listSessions();
   const tasks = new Map();
   for (const issue of issues) tasks.set(issue.key, { key: issue.key, issue, pr: null });
@@ -61,7 +64,7 @@ function buildReviewHistory() {
     return {
       id: s.id, chore: s.chore, state: s.state, pr: s.pr, repo: s.repo, title: s.title ?? pr?.title ?? null,
       author: s.author ?? pr?.author ?? null, url: pr?.url ?? (s.pr ? `https://github.com/${s.repo}/pull/${s.pr}` : null),
-      open: !!pr, outdated: !!(pr && s.head_sha && pr.head_sha !== s.head_sha),
+      open: !!pr && !pr.closed_at, outdated: !!(pr && s.head_sha && pr.head_sha !== s.head_sha),
       started_at: s.started_at, ended_at: s.ended_at, cost_usd: s.cost_usd, model: s.model, posted_url: s.posted_url, error: s.error,
       summary: r?.summary ?? null, comments: r?.comments ?? [],
       counts: { critical: count('critical'), warning: count('warning'), suggestion: count('suggestion') },
@@ -71,7 +74,7 @@ function buildReviewHistory() {
 
 function buildReviews() {
   const sessions = listSessions().filter((s) => REVIEW_KINDS.includes(s.chore));
-  return db.prepare("SELECT * FROM prs WHERE kind = 'review'").all().map((pr) => {
+  return db.prepare("SELECT * FROM prs WHERE kind = 'review' AND closed_at IS NULL").all().map((pr) => {
     const session = sessions.find((s) => s.repo === pr.repo && s.pr === pr.number) ?? null;
     return {
       ...pr,
@@ -80,6 +83,7 @@ function buildReviews() {
       session,
       outdated: !!(session?.head_sha && session.head_sha !== pr.head_sha),
       auto: config.autoReview.authors.includes(pr.author),
+      team: config.team.find((m) => m.login === pr.author)?.name ?? null,
     };
   }).sort((a, b) => a.lines - b.lines);
 }
@@ -107,7 +111,11 @@ async function state() {
     sync: kv.get('sync') ?? null,
     jira: { ...(kv.get('jira') ?? {}), source: await jiraSource(), site: config.jira.site, service: config.jira.keychainService, email: config.email },
     autoReview: autoReviewState(),
-    chores: [...CHORES, CUSTOM, REVIEW_CHORE, AUTO_REVIEW_CHORE, BATCH, EPIC_PLAN].map(({ key, label, model, effort }) => ({ key, label, model, effort })),
+    team: config.team,
+    events: db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT 150').all(),
+    slack: { ...(kv.get('slack') ?? {}), enabled: config.slack.enabled, model: config.slack.model, items: slackItems() },
+    db: { path: join(config.dataDir, 'ai-dashboard.db'), tables: Object.fromEntries(['issues', 'epics', 'prs', 'sessions', 'events', 'usage', 'slack'].map((t) => [t, db.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n])) },
+    chores: [...CHORES, CUSTOM, REVIEW_CHORE, AUTO_REVIEW_CHORE, BATCH, EPIC_PLAN, STANDUP].map(({ key, label, model, effort }) => ({ key, label, model, effort })),
     models: MODELS,
     efforts: EFFORTS,
   };
@@ -126,6 +134,7 @@ let syncing = false;
 async function sync({ force = false } = {}) {
   // Jira can take ~40s through the connector: it runs on its own and pushes when it lands.
   syncJira({ force }).catch((e) => console.error('jira', e.message)).finally(pushState);
+  syncSlack({ force }).catch((e) => console.error('slack', e.message)).finally(pushState);
   pushState();
   if (syncing) return;
   syncing = true;
@@ -140,9 +149,16 @@ async function sync({ force = false } = {}) {
 }
 
 async function onReviewDone(session) {
-  const pr = db.prepare('SELECT * FROM prs WHERE repo = ? AND number = ?').get(session.repo, session.pr);
+  const pr = db.prepare('SELECT * FROM prs WHERE repo = ? AND number = ? AND closed_at IS NULL').get(session.repo, session.pr);
   if (!pr) return { error: 'PR no longer open' };
-  return postDraftReview(session, pr);
+  const out = await postDraftReview(session, pr);
+  const auto = session.chore === 'auto-review';
+  let counts = '';
+  try { const c = JSON.parse(out.review_json ?? '{}').comments ?? []; counts = ` — ${['critical', 'warning', 'suggestion'].map((k) => `${c.filter((x) => x.severity === k).length} ${k}`).join(', ')}`; } catch {}
+  logEvent(out.error ? 'review-error' : auto ? 'review-posted' : 'review-draft',
+    out.error ? `Review #${pr.number} non postée : ${out.error}` : `${auto ? 'Brutal review postée' : 'Brouillon de review créé'} sur #${pr.number}${counts}`,
+    { repo: pr.repo, pr: pr.number, session: session.id });
+  return out;
 }
 
 // Reviews posted before review_json existed: parse them once from their transcript.
@@ -153,7 +169,13 @@ for (const s of db.prepare(`SELECT * FROM sessions WHERE chore IN ('ai-review','
 setInterval(sync, config.syncEveryMs);
 setInterval(() => pollSessions(onReviewDone).then((c) => c && pushState()).catch((e) => console.error('poll', e.message)), config.sessionPollMs);
 setInterval(pushState, 15_000); // stack status, relative times
+const usageTick = () => scanUsage().then((n) => { kv.set('usageScannedAt', new Date().toISOString()); if (n) pushState(); }).catch((e) => console.error('usage', e.message));
+setInterval(usageTick, 5 * 60_000);
+usageTick();
 sync();
+
+// Read-only connection for the SQL console: it can't write, whatever the query says.
+const ro = new DatabaseSync(join(config.dataDir, 'ai-dashboard.db'), { readOnly: true });
 
 // ---- actions -----------------------------------------------------------------
 function findTask(key) {
@@ -170,7 +192,7 @@ function choreDefaults(body) {
     return { chore: BATCH, tasks, prompt: BATCH.prompt(tasks) };
   }
   if (body.kind === 'review') {
-    const pr = db.prepare("SELECT * FROM prs WHERE kind = 'review' AND repo = ? AND number = ?").get(body.repo, Number(body.pr));
+    const pr = db.prepare("SELECT * FROM prs WHERE kind = 'review' AND closed_at IS NULL AND repo = ? AND number = ?").get(body.repo, Number(body.pr));
     if (!pr) throw httpError(404, 'PR not found');
     const chore = body.chore === 'auto-review' ? AUTO_REVIEW_CHORE : REVIEW_CHORE;
     return { chore, pr, prompt: chore.prompt(pr) };
@@ -245,6 +267,7 @@ createServer(async (req, res) => {
       return res.end(await readFile(join(WEB, file)));
     }
     if (req.method === 'GET' && pathname === '/api/state') return json(res, 200, await state());
+    if (req.method === 'GET' && pathname === '/api/usage') return json(res, 200, usageStats(Object.fromEntries(searchParams)));
     if (req.method === 'GET' && pathname === '/api/chore') {
       const d = choreDefaults(Object.fromEntries(searchParams));
       return json(res, 200, { key: d.chore.key, label: d.chore.label, model: d.chore.model, effort: d.chore.effort, prompt: d.prompt });
@@ -266,6 +289,19 @@ createServer(async (req, res) => {
       // Custom header → a cross-site page can't send it without a CORS preflight we never answer.
       if (req.headers['x-dashboard'] !== '1') return json(res, 403, { error: 'missing X-Dashboard header' });
       const body = await readBody(req);
+      if (pathname === '/api/slack/sync') {
+        syncSlack({ force: true, model: body.model === 'sonnet' ? 'sonnet' : undefined }).catch(() => {}).finally(pushState);
+        pushState();
+        return json(res, 202, { ok: true });
+      }
+      const ss = pathname.match(/^\/api\/slack\/(.+)\/status$/);
+      if (ss) { setSlackStatus(decodeURIComponent(ss[1]), ['new', 'done', 'snoozed'].includes(body.status) ? body.status : 'new'); pushState(); return json(res, 200, { ok: true }); }
+      if (pathname === '/api/sql') {
+        const q = String(body.q ?? '').trim();
+        if (!/^(select|with|pragma table_info)\b/i.test(q)) throw httpError(400, 'lecture seule : SELECT / WITH uniquement');
+        const rows = ro.prepare(q).all().slice(0, 1000);
+        return json(res, 200, { rows });
+      }
       if (pathname === '/api/sync') { resetJiraToken(); await sync({ force: true }); return json(res, 200, { ok: true }); }
       if (pathname === '/api/sessions') { const id = await startSession(body); pushState(); return json(res, 200, { id }); }
       const reply = pathname.match(/^\/api\/sessions\/([0-9a-f]+)\/reply$/);

@@ -51,19 +51,28 @@ function row(repo, kind, pr, requested) {
 export async function syncGithub() {
   for (const { slug } of config.repos) {
     const base = `repo:${slug} is:pr is:open`;
-    const [mine, others, requested] = await Promise.all([
+    // Teammates' drafts too: I want to see the mobile team's work in progress, not only what's ready.
+    const [mine, others, teamDrafts, requested] = await Promise.all([
       search(`${base} author:@me`),
       search(`${base} -author:@me draft:false`),
+      search(`${base} draft:true ${config.team.map((m) => `author:${m.login}`).join(' ')}`),
       search(`${base} review-requested:@me`),
     ]);
+    const seen = new Set(others.map((p) => p.number));
+    others.push(...teamDrafts.filter((p) => !seen.has(p.number)));
     const requestedSet = new Set(requested.map((p) => p.number));
     const rows = [
       ...mine.map((p) => row(slug, 'mine', p, requestedSet)),
       ...others.filter((p) => p.author?.__typename !== 'Bot').map((p) => row(slug, 'review', p, requestedSet)),
     ];
     db.exec('BEGIN');
-    db.prepare('DELETE FROM prs WHERE repo = ?').run(slug); // closed/merged PRs drop out
-    rows.forEach((r) => upsert('prs', r));
+    // Merged/closed PRs stay as history, flagged closed_at.
+    const open = new Set(rows.map((r) => r.number));
+    const now = new Date().toISOString();
+    for (const { number } of db.prepare('SELECT number FROM prs WHERE repo = ? AND closed_at IS NULL').all(slug)) {
+      if (!open.has(number)) db.prepare('UPDATE prs SET closed_at = ? WHERE repo = ? AND number = ?').run(now, slug, number);
+    }
+    rows.forEach((r) => upsert('prs', { ...r, closed_at: null }));
     db.exec('COMMIT');
   }
 }

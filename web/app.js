@@ -43,7 +43,11 @@ const PAGES = {
   tasks: ['Tâches', 'Tes PR et tes tickets en cours, avec la prochaine action suggérée'],
   jira: ['Jira', 'Tous les tickets qui te sont assignés'],
   epics: ['Epics & plans', 'Lance un plan sur un epic : Claude lit les tickets et le code, propose un découpage, attend ton go'],
-  reviews: ['PR à relire', "Les PR ouvertes de l'équipe"],
+  reviews: ["PR de l'équipe", 'Les PR de la team mobile (drafts compris) et des autres, à traiter depuis ici'],
+  radar: ['Radar auto-review', 'Ce que la brutal review automatique surveille, lance et trouve — en direct'],
+  slack: ['Slack filtré', 'Seulement ce qui a besoin de toi : DMs, mentions, threads, incidents — le bruit en moins'],
+  usage: ['Conso IA', 'Tokens et coût estimé de TOUTES tes sessions Claude Code sur ce Mac'],
+  data: ['Journal & base', 'Tout ce que la machine fait, et ta base locale SQLite interrogeable'],
   brutal: ['Brutal reviews', 'Chaque review faite par Claude : verdict, findings, coût'],
   sessions: ['Sessions', 'Chaque session Claude lancée depuis le dashboard'],
   stack: ['Stack local', 'Metro sur un checkout détaché, jamais ton clone principal'],
@@ -56,7 +60,7 @@ function showPage(name) {
   $('#pageSub').textContent = PAGES[name][1];
 }
 document.querySelectorAll('#nav a').forEach((a) => (a.onclick = () => { location.hash = a.dataset.page; }));
-window.addEventListener('hashchange', () => showPage(pageFromHash()));
+window.addEventListener('hashchange', () => { showPage(pageFromHash()); if (S && pageFromHash() === 'usage') RENDER.usage(); });
 showPage(pageFromHash());
 
 // ---- filter bars -------------------------------------------------------------
@@ -72,10 +76,10 @@ function filterBar(page, def) {
   if (bar.contains(document.activeElement) && document.activeElement.matches('input, select')) return;
   const f = fget(page);
   const chips = (def.chips ?? []).map((c) => `<div class="chips">${c.options.map(([v, label, n]) =>
-    `<button data-fchip="${page}|${c.name}|${esc(v)}" class="${(f.chips[c.name] ?? c.options[0][0]) === v ? 'on' : ''}">${esc(label)}${n != null ? `<em>${n}</em>` : ''}</button>`).join('')}</div>`).join('');
+    `<button data-fchip="${page}|${c.name}|${esc(v)}" class="${(f.chips[c.name] ?? c.dflt ?? c.options[0][0]) === v ? 'on' : ''}">${esc(label)}${n != null ? `<em>${n}</em>` : ''}</button>`).join('')}</div>`).join('');
   const selects = (def.selects ?? []).map((s) => `<select data-fsel="${page}|${s.name}"><option value="">${esc(s.all)}</option>${s.options.map(([v, l]) =>
     `<option value="${esc(v)}" ${f.sel[s.name] === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`).join('');
-  const dirty = f.q || Object.values(f.sel).some(Boolean) || Object.entries(f.chips).some(([k, v]) => v !== (def.chips ?? []).find((c) => c.name === k)?.options[0][0]);
+  const dirty = f.q || Object.values(f.sel).some(Boolean) || Object.entries(f.chips).some(([k, v]) => { const c = (def.chips ?? []).find((x) => x.name === k); return c && v !== (c.dflt ?? c.options[0][0]); });
   bar.innerHTML = `${def.search ? `<div class="search"><input type="search" data-fq="${page}" placeholder="${esc(def.search)}" value="${esc(f.q)}"></div>` : ''}${chips}${selects}
     ${def.extra ?? ''}${dirty ? `<button class="ghost reset" data-freset="${page}">Réinitialiser</button>` : ''}`;
 }
@@ -150,6 +154,9 @@ function actionItems() {
   for (const r of S.reviewHistory.filter((x) => x.error && x.open)) {
     items.push({ c: 'rose', ico: '✗', t: `Review #${r.pr} non postée`, s: r.error, a: `<button data-review="${r.pr}" data-repo="${esc(r.repo)}" data-rchore="${r.chore}">Relancer</button>`, w: 1 });
   }
+  for (const m of (S.slack?.items ?? []).filter((x) => x.status === 'new' && x.priority !== 'fyi')) {
+    items.push({ c: m.priority === 'urgent' ? 'rose' : 'amber', ico: '#', t: `${m.channel} · ${m.summary}`, s: m.action || m.why || m.author, a: `${m.permalink ? `<a href="${esc(m.permalink)}" target="_blank">Slack ↗</a>` : ''} <button class="ghost" data-slack="${esc(m.id)}" data-st="done">✓</button>`, w: m.priority === 'urgent' ? 0 : 0.5 });
+  }
   return items.sort((a, b) => a.w - b.w);
 }
 
@@ -169,7 +176,7 @@ function renderHome() {
   const hello = h < 12 ? 'Bonjour' : h < 18 ? 'Bon après-midi' : 'Bonsoir';
 
   $('#page-home').innerHTML = `
-    <div class="hero"><h2>${hello} Eric 👋</h2>
+    <div class="hero"><button class="hero-btn" id="standupBtn">☀ Préparer mon stand-up</button><h2>${hello} Eric 👋</h2>
       <p>${items.length ? `<b>${items.length}</b> chose${items.length > 1 ? 's' : ''} à traiter` : 'Rien ne t’attend — tout roule'} · ${live.length} session${live.length > 1 ? 's' : ''} en cours · ${myPrs.length} PR ouvertes · ${S.tasks.filter((t) => t.issue?.status_category === 'indeterminate').length} tickets en cours</p></div>
     <div class="kpis">
       <div class="kpi pink" data-go="sessions"><b>${blocked.length}</b><small>attendent ta réponse</small></div>
@@ -334,41 +341,52 @@ RENDER.epics = renderEpics;
 
 // ---- PR à relire -------------------------------------------------------------------
 const REVIEW_STATES = [
-  ['all', 'Toutes'], ['todo', 'Pas relues', (r) => !r.my_review && !r.session], ['running', 'Review en cours', (r) => r.session && ACTIVE.includes(r.session.state)],
-  ['done', 'Relues par Claude', (r) => r.session?.posted_url], ['outdated', 'Nouveaux commits', (r) => r.outdated], ['mine', 'Ma review', (r) => r.my_review],
+  ['all', 'Toutes'], ['todo', 'Pas relues', (r) => !r.my_review && !r.session && !r.is_draft], ['requested', 'Review demandée', (r) => r.requested_me && !r.my_review],
+  ['running', 'Review en cours', (r) => r.session && ACTIVE.includes(r.session.state)], ['done', 'Relues par Claude', (r) => r.session?.posted_url],
+  ['outdated', 'Nouveaux commits', (r) => r.outdated], ['draft', 'Drafts', (r) => r.is_draft], ['mine', 'Ma review', (r) => r.my_review],
 ];
 const MY = { PENDING: ['warn', 'brouillon à soumettre'], APPROVED: ['ok', 'approuvée'], CHANGES_REQUESTED: ['err', 'changes demandés'], COMMENTED: ['info', 'commentée'] };
+const initials = (n) => n.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
 function renderReviews() {
   const all = S.reviews;
-  $('#c-reviews').textContent = all.filter((r) => !r.my_review && !r.session).length || '';
-  const authors = [...new Set(all.map((r) => r.author))].sort();
+  $('#c-reviews').textContent = all.filter((r) => r.team && !r.my_review && !r.session && !r.is_draft).length || '';
   const a = S.autoReview;
   filterBar('reviews', {
     search: 'Rechercher (#, titre, auteur)…',
     chips: [
+      { name: 'who', options: [['team', 'Équipe mobile', all.filter((r) => r.team).length], ['others', 'Autres', all.filter((r) => !r.team).length], ['all', 'Tous', all.length]] },
       { name: 'state', options: REVIEW_STATES.map(([k, l, fn]) => [k, l, fn ? all.filter(fn).length : all.length]) },
-      { name: 'size', options: [['all', 'Taille'], ...['S', 'M', 'L', 'XL'].map((s) => [s, s, all.filter((r) => r.size === s).length])] },
+      { name: 'size', options: [['all', 'Taille'], ...['S', 'M', 'L', 'XL'].map((x) => [x, x, all.filter((r) => r.size === x).length])] },
     ],
-    selects: [{ name: 'author', all: 'Tous les auteurs', options: authors.map((x) => [x, `@${x}${a?.authors.includes(x) ? ' ⚡' : ''}`]) }],
-    extra: a?.enabled ? `<span class="badge pink" title="Nouvelles PR prêtes de ${esc(a.authors.join(', '))} : brutal review postée automatiquement">⚡ auto ON · ${a.authors.length} auteurs</span>` : '',
+    selects: [{ name: 'author', all: 'Tous les auteurs', options: [...new Set(all.map((r) => r.author))].sort().map((x) => [x, `${all.find((r) => r.author === x)?.team ?? `@${x}`}${a?.authors.includes(x) ? ' ⚡' : ''}`]) }],
+    extra: a?.enabled ? `<a href="#radar" class="badge pink" title="Brutal review postée automatiquement sur les nouvelles PR prêtes de ${esc(a.authors.join(', '))}">⚡ auto ON · radar →</a>` : '',
   });
   const f = fget('reviews');
+  const who = chip('reviews', 'who', 'team');
   const fn = REVIEW_STATES.find(([k]) => k === chip('reviews', 'state', 'all'))?.[2];
   const size = chip('reviews', 'size', 'all');
-  const reviews = all.filter((r) => (!fn || fn(r)) && (size === 'all' || r.size === size) && (!sel('reviews', 'author') || r.author === sel('reviews', 'author'))
-    && textMatch(f.q, `#${r.number}`, r.title, r.author));
-  if (!reviews.length) return ($('#r-reviews').innerHTML = `<div class="panel"><div class="empty">${all.length ? 'Aucune PR ne correspond aux filtres.' : 'Aucune PR de collègue ouverte.'}</div></div>`);
-  $('#r-reviews').innerHTML = `<div class="panel"><div class="scroll"><table>
+  const reviews = all.filter((r) => (who === 'all' || (who === 'team') === !!r.team) && (!fn || fn(r)) && (size === 'all' || r.size === size)
+    && (!sel('reviews', 'author') || r.author === sel('reviews', 'author')) && textMatch(f.q, `#${r.number}`, r.title, r.author, r.team));
+  // One card per teammate: what they have open and what waits on me.
+  const devs = S.team.map((m) => {
+    const prs = all.filter((r) => r.author === m.login);
+    return `<div class="dev ${sel('reviews', 'author') === m.login ? 'on' : ''}" data-dev="${esc(m.login)}">
+      <span class="avatar">${esc(initials(m.name))}</span>
+      <div><b>${esc(m.name)}</b><small>@${esc(m.login)}${a?.authors.includes(m.login) ? ' · ⚡ auto' : ''}</small></div>
+      <div class="devstats"><span title="PR ouvertes"><b>${prs.filter((r) => !r.is_draft).length}</b> prêtes</span><span title="Drafts"><b>${prs.filter((r) => r.is_draft).length}</b> drafts</span>
+        <span class="${prs.some((r) => r.requested_me && !r.my_review) ? 'hot' : ''}" title="Review demandée, pas encore faite"><b>${prs.filter((r) => r.requested_me && !r.my_review).length}</b> pour moi</span></div></div>`;
+  }).join('');
+  const table = reviews.length ? `<div class="panel"><div class="scroll"><table>
     <colgroup><col><col style="width:130px"><col style="width:110px"><col style="width:150px"><col style="width:190px"><col style="width:330px"></colgroup>
     <thead><tr><th>PR</th><th>Taille</th><th>Checks</th><th>Ma review</th><th>Brutal review</th><th></th></tr></thead>
     <tbody>${reviews.map((r) => {
       const s = r.session, my = MY[r.my_review];
       return `<tr>
-        <td><div class="title"><a href="${esc(r.url)}" target="_blank">#${r.number}</a> ${esc(r.title)}</div>
-          <div class="sub">@${esc(r.author)}${r.auto ? ' ⚡' : ''} · ${ago(r.updated)}${r.requested_me ? ' · <b style="color:var(--sky)">review demandée</b>' : ''}</div></td>
+        <td><div class="title"><a href="${esc(r.url)}" target="_blank">#${r.number}</a> ${r.is_draft ? '<span class="badge">draft</span> ' : ''}${esc(r.title)}</div>
+          <div class="sub">${r.team ? `<b>${esc(r.team)}</b>` : `@${esc(r.author)}`}${r.auto ? ' ⚡' : ''} · ${ago(r.updated)}${r.requested_me ? ' · <b style="color:var(--sky)">review demandée</b>' : ''}${r.unresolved_threads ? ` · 💬 ${r.unresolved_threads}` : ''}</div></td>
         <td>${sizeTag(r.size)} ${diffTag(r.additions, r.deletions)}<div class="muted small">${r.changed_files} fichiers</div></td>
-        <td>${checksBadge(r.checks)}</td>
-        <td>${my ? `<span class="badge ${my[0]}">${my[1]}</span>` : ''}</td>
+        <td>${checksBadge(r.checks)}${r.mergeable === 'CONFLICTING' ? ' <span class="badge err">conflits</span>' : ''}</td>
+        <td>${my ? `<span class="badge ${my[0]}">${my[1]}</span>` : decisionBadge(r.review_decision)}</td>
         <td>${s ? `${sessionLink(s)} ${r.outdated ? '<span class="badge warn" title="Nouveaux commits depuis la review">obsolète</span>' : ''}${s.error ? `<div class="small" style="color:var(--rose)">${esc(s.error)}</div>` : ''}` : ''}</td>
         <td><div class="row-actions">
           ${s?.posted_url ? `<a href="${esc(s.posted_url)}" target="_blank">${s.chore === 'auto-review' ? 'postée' : 'brouillon'} ↗</a>` : ''}
@@ -376,8 +394,16 @@ function renderReviews() {
           <button data-review="${r.number}" data-repo="${esc(r.repo)}" title="Brutal review en brouillon GitHub, tu soumets toi-même">Brouillon</button>
           <button class="ghost" data-stack-pr="${r.number}" title="Charger dans le stack local">▶</button>
         </div></td></tr>`;
-    }).join('')}</tbody></table></div></div>`;
+    }).join('')}</tbody></table></div></div>` : `<div class="panel"><div class="empty">${all.length ? 'Aucune PR ne correspond aux filtres.' : 'Aucune PR de collègue ouverte.'}</div></div>`;
+  $('#r-reviews').innerHTML = `<div class="devs">${devs}</div>${table}`;
 }
+document.addEventListener('click', (e) => {
+  const d = e.target.closest('[data-dev]');
+  if (!d) return;
+  const f = fget('reviews');
+  f.sel.author = f.sel.author === d.dataset.dev ? '' : d.dataset.dev;
+  f.chips.who = 'team'; saveF(); renderReviews();
+});
 RENDER.reviews = renderReviews;
 
 // ---- brutal reviews ----------------------------------------------------------------
@@ -499,6 +525,246 @@ function renderSessions() {
 }
 RENDER.sessions = renderSessions;
 
+// ---- radar: the auto brutal review, live ---------------------------------------------
+const RADAR_STATUS = {
+  queued: ['warn', 'en file'], launched: ['live', 'lancée'], reviewing: ['live', 'review en cours'], posted: ['ok', 'postée'],
+  error: ['err', 'erreur'], baseline: ['', 'ignorée (déjà ouverte à l’activation)'], mine: ['info', 'déjà relue par toi'], draft: ['', 'draft — attend « ready »'],
+};
+const EVENT_ICON = { 'auto-check': ['sky', '◉'], 'auto-launch': ['violet', '▶'], 'review-posted': ['pink', '⚡'], 'review-draft': ['emerald', '✎'], 'review-error': ['rose', '✗'], 'auto-error': ['rose', '✗'], 'auto-review': ['amber', '★'], 'session-start': ['violet', '▶'], 'session-blocked': ['pink', '✋'], 'session-done': ['emerald', '✓'], slack: ['sky', '#'], 'slack-error': ['rose', '#'] };
+const eventRow = (e) => { const [c, i] = EVENT_ICON[e.kind] ?? ['violet', '•']; return `<div class="ev c-${c}"><span class="ico">${i}</span><div><div>${esc(e.message)}</div><div class="faint small">${new Date(e.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'medium' })} · ${esc(e.kind)}${e.pr ? ` · <a href="https://github.com/${esc(e.repo)}/pull/${e.pr}" target="_blank">#${e.pr}</a>` : ''}</div></div></div>`; };
+const liveFeeds = {}; // session id → last tool lines, filled by polling the transcript
+async function pollLiveReviews() {
+  if (!S || pageFromHash() !== 'radar') return;
+  const live = S.sessions.filter((s) => ['auto-review', 'ai-review'].includes(s.chore) && ACTIVE.includes(s.state));
+  await Promise.all(live.map(async (s) => {
+    const r = await fetch(`/api/sessions/${s.id}/transcript`).catch(() => null);
+    if (!r?.ok) return;
+    const { items } = await r.json();
+    liveFeeds[s.id] = items.slice(-10);
+  }));
+  const el = $('#radarLive');
+  if (el) el.innerHTML = radarLive();
+}
+function radarLive() {
+  const live = S.sessions.filter((s) => ['auto-review', 'ai-review'].includes(s.chore) && ACTIVE.includes(s.state));
+  if (!live.length) return '<div class="empty">Aucune review en cours — la prochaine nouvelle PR de l’équipe démarrera ici.</div>';
+  return live.map((s) => `<div class="rv"><div class="rv-head"><span class="dot live"></span><div class="grow"><div class="title">#${s.pr} ${esc(s.title ?? '')}</div>
+    <div class="sub">${s.author ? `@${esc(s.author)} · ` : ''}${esc(s.model)} · ${dur(s.started_at)} · ${s.turns} tours · <span class="cost">${money(s.cost_usd)}</span></div></div>
+    <button class="ghost" data-open-session="${s.id}">Conversation</button>${termBtn(s)}</div>
+    <div class="ticker">${(liveFeeds[s.id] ?? []).map((m) => m.role === 'tool' ? `<div><b>${esc(m.name)}</b> ${esc(m.text)}</div>` : `<div class="say">${esc(m.text.slice(0, 220))}</div>`).join('') || '<div class="faint">démarrage…</div>'}</div></div>`).join('');
+}
+function renderRadar() {
+  const a = S.autoReview;
+  if (!a) return;
+  const live = S.sessions.filter((s) => s.chore === 'auto-review' && ACTIVE.includes(s.state));
+  $('#radarDot').className = `dot ${live.length ? 'live' : a.enabled ? 'ok' : ''}`;
+  const next = a.lastCheck ? Math.max(0, new Date(a.lastCheck).getTime() + a.everyMs - Date.now()) : null;
+  const posted = S.reviewHistory.filter((r) => r.chore === 'auto-review');
+  const events = S.events.filter((e) => /^(auto|review)/.test(e.kind));
+  $('#page-radar').innerHTML = `
+    <div class="hero radar"><div class="radar-ring ${a.enabled ? 'on' : ''}"><span></span></div>
+      <div><h2>${a.enabled ? 'Radar actif' : 'Radar coupé'} ${live.length ? `· <span style="color:var(--violet)">${live.length} review${live.length > 1 ? 's' : ''} en cours</span>` : ''}</h2>
+      <p>Surveille ${a.authors.map((x) => `<b>${esc(S.team.find((m) => m.login === x)?.name ?? x)}</b>`).join(', ')} sur hivebrite-mobile · check toutes les ${Math.round(a.everyMs / 60000)} min · ${a.maxConcurrent} en parallèle max</p>
+      <p class="small">Dernier check ${a.lastCheck ? `il y a ${ago(a.lastCheck)}` : '—'} · prochain dans <b id="radarNext" data-at="${a.lastCheck ? new Date(a.lastCheck).getTime() + a.everyMs : ''}">${next != null ? fmtMs(next) : '—'}</b> · actif depuis ${a.since ? new Date(a.since).toLocaleString('fr-FR') : '—'}</p></div></div>
+    <div class="kpis">
+      <div class="kpi violet"><b>${a.watched.length}</b><small>PR surveillées</small></div>
+      <div class="kpi pink"><b>${posted.length}</b><small>reviews postées</small></div>
+      <div class="kpi rose"><b>${posted.reduce((n, r) => n + r.counts.critical, 0)}</b><small>findings critiques</small></div>
+      <div class="kpi amber"><b>${posted.reduce((n, r) => n + r.counts.warning, 0)}</b><small>warnings</small></div>
+      <div class="kpi emerald"><b>${money(posted.reduce((n, r) => n + (r.cost_usd ?? 0), 0))}</b><small>coût est. total</small></div>
+    </div>
+    <div class="grid2">
+      <div>
+        <div class="panel"><h2><span class="dot live"></span> En direct</h2><div id="radarLive">${radarLive()}</div></div>
+        <div class="panel"><h2>PR surveillées <span class="count">${a.watched.length}</span></h2><div class="feed">${a.watched.map((w) => {
+          const [cls, label] = RADAR_STATUS[w.status] ?? ['', w.status];
+          return `<div class="item c-${w.status === 'posted' ? 'pink' : w.status === 'error' ? 'rose' : 'violet'}"><span class="ico">${w.status === 'posted' ? '⚡' : w.status === 'baseline' ? '·' : '◉'}</span>
+            <div style="min-width:0"><div class="t"><a href="${esc(w.url)}" target="_blank">#${w.number}</a> ${esc(w.title)}</div><div class="s">${esc(S.team.find((m) => m.login === w.author)?.name ?? w.author)} · ${w.size} lignes${w.outdated ? ' · nouveaux commits depuis la review' : ''}</div></div>
+            <div class="row-actions"><span class="badge ${cls}">${esc(label)}</span>${w.session ? `<button class="ghost" data-open-session="${w.session.id}">voir</button>` : ''}${['baseline', 'mine'].includes(w.status) || w.outdated ? `<button class="brutal" data-review="${w.number}" data-repo="${esc(w.repo)}" data-rchore="auto-review">⚡ Lancer</button>` : ''}</div></div>`;
+        }).join('') || '<div class="empty">Aucune PR ouverte de ces auteurs.</div>'}</div></div>
+      </div>
+      <div>
+        <div class="panel"><h2>⚡ Ce que le radar a trouvé</h2>${posted.slice(0, 8).map((r) => `<div class="rv"><div class="rv-head"><div class="grow"><div class="title">${r.url ? `<a href="${esc(r.url)}" target="_blank">#${r.pr}</a>` : `#${r.pr}`} ${esc(r.title ?? '')}</div><div class="sub">${esc(S.team.find((m) => m.login === r.author)?.name ?? r.author ?? '')} · ${ago(r.started_at)} · <span class="cost">${money(r.cost_usd)}</span></div></div>${r.summary ? sevPills(r.counts) : sessionBadge(r)}</div>
+          ${r.comments.filter((c) => c.severity !== 'suggestion').slice(0, 3).map((c) => `<div class="finding ${esc(c.severity)}"><div class="loc">${SEV_LABEL[c.severity] ?? ''} · ${esc(c.path)}:${esc(c.line)}</div><div class="md">${md(c.body.slice(0, 400))}</div></div>`).join('')}</div>`).join('') || '<div class="empty">Rien encore — les findings apparaîtront ici dès la première review postée.</div>'}</div>
+        <div class="panel"><h2>Journal du radar</h2><div class="evlist">${events.slice(0, 40).map(eventRow).join('') || '<div class="empty">Le premier check arrive au prochain sync.</div>'}</div></div>
+      </div>
+    </div>`;
+}
+setInterval(() => { const el = $('#radarNext'); if (el?.dataset.at) el.textContent = fmtMs(Math.max(0, Number(el.dataset.at) - Date.now())) || '0s'; }, 1000);
+setInterval(pollLiveReviews, 3000);
+
+// ---- slack ------------------------------------------------------------------------------
+const PRIO = { urgent: ['rose', '🔥 Urgent'], important: ['amber', '★ Important'], fyi: ['sky', 'ℹ︎ Pour info'] };
+const KIND = { dm: 'DM', mention: 'Mention', thread: 'Thread', team: 'Équipe', incident: 'Incident' };
+function renderSlack() {
+  const sl = S.slack ?? { items: [] };
+  const items = sl.items ?? [];
+  $('#c-slack').textContent = items.filter((i) => i.status === 'new' && i.priority !== 'fyi').length || '';
+  filterBar('slack', {
+    search: 'Rechercher (texte, auteur, canal)…',
+    chips: [
+      { name: 'status', options: [['new', 'À traiter', items.filter((i) => i.status === 'new').length], ['snoozed', 'Plus tard', items.filter((i) => i.status === 'snoozed').length], ['done', 'Traités', items.filter((i) => i.status === 'done').length], ['all', 'Tout', items.length]] },
+      { name: 'prio', options: [['all', 'Priorité'], ...Object.entries(PRIO).map(([k, [, l]]) => [k, l, items.filter((i) => i.priority === k).length])] },
+      { name: 'kind', options: [['all', 'Type'], ...Object.entries(KIND).map(([k, l]) => [k, l, items.filter((i) => i.kind === k).length])] },
+    ],
+    selects: [{ name: 'channel', all: 'Tous les canaux', options: [...new Set(items.map((i) => i.channel))].sort().map((c) => [c, c]) }],
+    extra: `<span class="muted small">${sl.running ? '<span class="dot live"></span> tri en cours…' : sl.at ? `trié il y a ${ago(sl.at)} · ${esc(sl.model ?? '')}${sl.cost ? ` · $${sl.cost.toFixed(3)}` : ''}` : 'jamais trié'}</span>
+      <button id="slackSync" ${sl.running ? 'disabled' : ''}>⟳ Trier</button><button class="primary" id="slackDeep" ${sl.running ? 'disabled' : ''} title="Même tri avec Sonnet : plus fin, plus cher">Analyse fine</button>`,
+  });
+  const f = fget('slack');
+  const st = chip('slack', 'status', 'new'), pr = chip('slack', 'prio', 'all'), kd = chip('slack', 'kind', 'all');
+  const list = items.filter((i) => (st === 'all' || i.status === st) && (pr === 'all' || i.priority === pr) && (kd === 'all' || i.kind === kd)
+    && (!sel('slack', 'channel') || i.channel === sel('slack', 'channel')) && textMatch(f.q, i.text, i.summary, i.author, i.channel));
+  if (sl.error) $('#r-slack').dataset.err = sl.error;
+  $('#r-slack').innerHTML = `${sl.error ? `<div class="panel"><div class="empty" style="color:var(--rose)">Dernier tri en échec : ${esc(sl.error)}</div></div>` : ''}
+    ${list.length ? `<div class="slack">${list.map((i) => { const [c, l] = PRIO[i.priority] ?? PRIO.fyi; return `<div class="sm c-${c} ${i.status !== 'new' ? 'dim' : ''}">
+      <div class="sm-head"><span class="badge" style="color:var(--c);background:var(--c-s);border-color:transparent">${l}</span> <span class="badge">${esc(KIND[i.kind] ?? i.kind ?? '')}</span>
+        <b>${esc(i.channel)}</b> <span class="muted">· ${esc(i.author)} · ${ago(i.ts)}</span><span class="spacer"></span>
+        ${i.permalink ? `<a href="${esc(i.permalink)}" target="_blank">Ouvrir ↗</a>` : ''}
+        ${i.status === 'new' ? `<button class="ghost" data-slack="${esc(i.id)}" data-st="snoozed">Plus tard</button><button data-slack="${esc(i.id)}" data-st="done">✓ Traité</button>` : `<button class="ghost" data-slack="${esc(i.id)}" data-st="new">Rouvrir</button>`}</div>
+      <div class="sm-sum">${esc(i.summary)}</div>
+      ${i.why ? `<div class="small muted">Pourquoi : ${esc(i.why)}</div>` : ''}
+      ${i.action ? `<div class="sm-act">→ ${esc(i.action)}</div>` : ''}
+      ${i.text ? `<blockquote>${esc(i.text)}</blockquote>` : ''}</div>`; }).join('')}</div>`
+      : `<div class="panel"><div class="empty">${items.length ? 'Rien ne correspond — profite 🎉' : sl.running ? 'Premier tri en cours (≈ 1-2 min)…' : 'Aucun message trié. Clique « Trier ».'}</div></div>`}`;
+}
+RENDER.slack = renderSlack;
+
+// ---- usage / conso IA ------------------------------------------------------------------
+const MODEL_COLOR = { opus: 'var(--violet)', fable: 'var(--pink)', sonnet: 'var(--sky)', haiku: 'var(--emerald)' };
+let U = null, uKey = '';
+async function loadUsage(force) {
+  const q = new URLSearchParams({ days: chip('usage', 'days', '30'), model: sel('usage', 'model'), project: sel('usage', 'project') });
+  if (!force && q.toString() === uKey && U) return;
+  uKey = q.toString();
+  const r = await fetch(`/api/usage?${q}`);
+  if (r.ok) { U = await r.json(); renderUsage(); }
+}
+function renderUsage() {
+  filterBar('usage', {
+    chips: [{ name: 'days', dflt: '30', options: [['1', "Aujourd'hui"], ['7', '7 jours'], ['30', '30 jours'], ['90', '90 jours'], ['365', '1 an']] }],
+    selects: [
+      { name: 'model', all: 'Tous les modèles', options: ['opus', 'fable', 'sonnet', 'haiku'].map((m) => [m, m]) },
+      { name: 'project', all: 'Tous les projets', options: (U?.projects ?? []).map((p) => [p, p]) },
+    ],
+    extra: `<span class="faint small">${U?.scannedAt ? `transcripts scannés il y a ${ago(U.scannedAt)}` : 'scan en cours…'}</span>`,
+  });
+  if (!U || uKey !== new URLSearchParams({ days: chip('usage', 'days', '30'), model: sel('usage', 'model'), project: sel('usage', 'project') }).toString()) { loadUsage(); if (!U) return ($('#r-usage').innerHTML = '<div class="panel"><div class="empty">Chargement…</div></div>'); }
+  const t = U.total;
+  const hit = t.cache_read / Math.max(1, t.input + t.cache_read + t.cache_write);
+  const days = [...new Set(U.perDay.map((d) => d.day))].sort();
+  const allDays = []; if (days.length) { const d0 = new Date(days[0]), d1 = new Date(); for (let d = new Date(d0); d <= d1; d.setDate(d.getDate() + 1)) allDays.push(d.toISOString().slice(0, 10)); }
+  const perDay = allDays.map((d) => ({ d, parts: U.perDay.filter((x) => x.day === d) }));
+  const maxDay = Math.max(0.01, ...perDay.map((x) => x.parts.reduce((a, p) => a + p.cost, 0)));
+  const bar = (list, color = () => 'var(--grad)') => { const max = Math.max(0.01, ...list.map((g) => g.cost)); return `<div class="hbars">${list.map((g) => `<span title="${esc(g.key)}">${esc(g.key)} <span class="faint">${kfmt(g.tokens)}</span></span><div class="b" style="width:${(g.cost / max) * 100}%;background:${color(g.key)}"></div><span class="cost">${money(g.cost)}</span>`).join('') || '<span class="muted">rien</span>'}</div>`; };
+  const maxH = Math.max(0.01, ...U.byHour);
+  $('#r-usage').innerHTML = `
+    <div class="kpis">
+      <div class="kpi pink"><b>${money(t.cost)}</b><small>coût est. · ${U.days} j</small></div>
+      <div class="kpi violet"><b>${kfmt(t.tokens)}</b><small>tokens au total</small></div>
+      <div class="kpi sky"><b>${kfmt(t.output)}</b><small>tokens générés (output)</small></div>
+      <div class="kpi emerald"><b>${Math.round(hit * 100)}%</b><small>lu depuis le cache</small></div>
+      <div class="kpi amber"><b>${money(t.cost / Math.max(1, Math.min(U.days, allDays.length || 1)))}</b><small>moyenne / jour</small></div>
+      <div class="kpi"><b>${kfmt(t.n)}</b><small>appels modèle</small></div>
+    </div>
+    <div class="panel"><h2>Coût / jour par modèle ${Object.entries(MODEL_COLOR).map(([m, c]) => `<span class="legend"><i style="background:${c}"></i>${m}</span>`).join('')}</h2>
+      <div class="bars stacked">${perDay.map(({ d, parts }) => { const tot = parts.reduce((a, p) => a + p.cost, 0); return `<div title="${d} · ${money(tot)}" style="height:${(tot / maxDay) * 100}%">${parts.sort((a, b) => b.cost - a.cost).map((p) => `<i style="flex:${p.cost};background:${MODEL_COLOR[p.fam] ?? 'var(--faint)'}"></i>`).join('')}<span>${perDay.length > 20 ? (new Date(d).getDate() % 5 ? '' : new Date(d).getDate()) : new Date(d).getDate()}</span></div>`; }).join('')}</div></div>
+    <div class="grid3">
+      <div class="panel"><h2>Par modèle</h2>${bar(U.byModel, (k) => MODEL_COLOR[k] ?? 'var(--faint)')}</div>
+      <div class="panel"><h2>Dashboard vs interactif</h2>${bar(U.bySource)}</div>
+      <div class="panel"><h2>Par chore</h2>${bar(U.byChore.map((g) => ({ ...g, key: choreLabel(g.key) })))}</div>
+    </div>
+    <div class="grid2">
+      <div class="panel"><h2>Par projet</h2>${bar(U.byProject)}</div>
+      <div class="panel"><h2>Par heure de la journée</h2><div class="hours">${U.byHour.map((c, h) => `<div title="${h}h · ${money(c)}" style="--a:${c / maxH}"><span>${h % 3 ? '' : h}</span></div>`).join('')}</div>
+        <div class="faint small" style="padding:0 16px 14px">Tokens : ${kfmt(t.input)} input · ${kfmt(t.output)} output · ${kfmt(t.cache_read)} lus du cache · ${kfmt(t.cache_write)} écrits en cache</div></div>
+    </div>
+    <div class="panel"><h2>Sessions les plus chères</h2><div class="scroll"><table>
+      <colgroup><col><col style="width:160px"><col style="width:100px"><col style="width:110px"><col style="width:100px"><col style="width:90px"></colgroup>
+      <thead><tr><th>Session</th><th>Projet</th><th>Modèle</th><th>Tokens</th><th>Date</th><th>Coût est.</th></tr></thead>
+      <tbody>${U.sessions.map((x) => `<tr><td><div class="title">${esc(x.name ?? (x.chore ? choreLabel(x.chore) : 'session interactive'))}</div><div class="sub mono">${esc(x.key)}</div></td><td class="small">${esc(x.proj ?? '')}</td><td class="mono">${esc(x.fam ?? '')}</td><td class="mono">${kfmt(x.tokens)}<div class="faint small">${x.n} appels</div></td><td class="muted">${x.first ? ago(x.first) : ''}</td><td class="cost">${money(x.cost)}</td></tr>`).join('')}</tbody></table></div></div>
+    <p class="faint small">Estimation au prix API de chaque appel (input, output, cache lu/écrit) — ton siège Claude Enterprise n'est pas facturé ainsi. Source : tous les transcripts de ~/.claude/projects, rescannés toutes les 5 min.</p>`;
+}
+RENDER.usage = () => { loadUsage(); renderUsage(); };
+
+// ---- journal & base ----------------------------------------------------------------------
+const PRESETS = [
+  ['Coût par jour (30 j)', "SELECT day, ROUND(SUM(cost), 2) AS cost_usd, SUM(output) AS output_tokens FROM usage WHERE day >= date('now', '-30 days') GROUP BY day ORDER BY day DESC"],
+  ['Reviews postées', "SELECT started_at, pr, author, title, ROUND(cost_usd, 2) AS cost, posted_url FROM sessions WHERE chore IN ('auto-review','ai-review') ORDER BY started_at DESC"],
+  ['PR fermées (historique)', "SELECT number, kind, author, title, closed_at FROM prs WHERE closed_at IS NOT NULL ORDER BY closed_at DESC"],
+  ['Mes tickets par epic', "SELECT parent_key, parent_summary, COUNT(*) AS tickets, SUM(status_category = 'indeterminate') AS en_cours FROM issues GROUP BY parent_key ORDER BY tickets DESC"],
+  ['Slack urgent', "SELECT ts, channel, author, summary, status FROM slack WHERE priority = 'urgent' ORDER BY ts DESC"],
+  ['Schéma', "SELECT name, sql FROM sqlite_master WHERE type = 'table'"],
+];
+function renderData() {
+  const kinds = [...new Set(S.events.map((e) => e.kind))].sort();
+  filterBar('data', {
+    search: 'Filtrer le journal…',
+    selects: [{ name: 'kind', all: 'Tous les événements', options: kinds.map((k) => [k, k]) }],
+  });
+  if ($('#page-data').contains(document.activeElement) && document.activeElement.matches('textarea')) return;
+  const f = fget('data');
+  const evs = S.events.filter((e) => (!sel('data', 'kind') || e.kind === sel('data', 'kind')) && textMatch(f.q, e.message, e.kind, e.pr));
+  const prev = $('#sqlq')?.value;
+  $('#r-data').innerHTML = `<div class="grid2">
+    <div class="panel"><h2>Journal <span class="count">${evs.length}</span></h2><div class="evlist tall">${evs.map(eventRow).join('') || '<div class="empty">Rien encore.</div>'}</div></div>
+    <div>
+      <div class="panel"><h2>Base locale</h2><div style="padding:12px 16px" class="small">
+        <div class="mono" style="user-select:all">${esc(S.db.path)}</div>
+        <div class="tables">${Object.entries(S.db.tables).map(([k, n]) => `<span class="badge">${esc(k)} <b>${kfmt(n)}</b></span>`).join(' ')}</div>
+        <div class="faint">Tout est stocké ici : tickets, epics, PR (fermées comprises), sessions + coûts, reviews, journal, tokens de chaque appel modèle, Slack trié. Ouvre-la aussi avec <span class="mono">sqlite3</span>.</div></div></div>
+      <div class="panel"><h2>Console SQL (lecture seule)</h2><div style="padding:12px 16px;display:flex;flex-direction:column;gap:8px">
+        <div class="chips">${PRESETS.map(([l], i) => `<button data-preset="${i}">${esc(l)}</button>`).join('')}</div>
+        <textarea id="sqlq" rows="4" class="mono" placeholder="SELECT … (⌘↩ pour exécuter)">${esc(prev ?? PRESETS[0][1])}</textarea>
+        <div class="actions"><button class="primary" id="sqlRun">Exécuter</button></div>
+        <div id="sqlOut" class="sqlout">${lastSql}</div></div></div>
+    </div></div>`;
+}
+let lastSql = '';
+async function runSql() {
+  try {
+    const { rows } = await post('/api/sql', { q: $('#sqlq').value });
+    const cols = rows.length ? Object.keys(rows[0]) : [];
+    lastSql = rows.length ? `<div class="faint small">${rows.length} ligne(s)</div><div class="scroll"><table class="md"><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${cols.map((c) => `<td>${esc(typeof r[c] === 'number' && !Number.isInteger(r[c]) ? r[c].toFixed(4) : r[c])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : '<div class="muted">Aucune ligne.</div>';
+  } catch (e) { lastSql = `<div style="color:var(--rose)">${esc(e.message)}</div>`; }
+  $('#sqlOut').innerHTML = lastSql;
+}
+document.addEventListener('click', (e) => {
+  const p = e.target.closest('[data-preset]');
+  if (p) { $('#sqlq').value = PRESETS[p.dataset.preset][1]; runSql(); }
+  if (e.target.id === 'sqlRun') runSql();
+});
+document.addEventListener('keydown', (e) => { if (e.target.id === 'sqlq' && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); runSql(); } });
+RENDER.data = renderData;
+
+// ---- ⌘K palette -------------------------------------------------------------------------
+function paletteItems(q) {
+  const out = Object.entries(PAGES).map(([k, [t]]) => ({ ico: '→', t, s: 'Page', go: () => (location.hash = k) }));
+  for (const t of S.tasks) out.push({ ico: '▤', t: `${t.key} ${t.issue?.summary ?? t.pr?.title ?? ''}`, s: t.pr ? `PR #${t.pr.number}` : 'ticket', go: () => window.open(t.pr?.url ?? `${S.jira.site}/browse/${t.key}`, '_blank') });
+  for (const r of S.reviews) out.push({ ico: '⇄', t: `#${r.number} ${r.title}`, s: r.team ?? `@${r.author}`, go: () => window.open(r.url, '_blank') });
+  for (const e of S.epics ?? []) out.push({ ico: '✦', t: `${e.key} ${e.summary ?? ''}`, s: 'epic — Entrée pour planifier', go: () => openChore({ kind: 'epic', epic: e.key }) });
+  for (const s of S.sessions) out.push({ ico: '▶', t: what(s), s: `session · ${choreLabel(s.chore)}`, go: () => openDrawer(s.id) });
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  return out.filter((i) => words.every((w) => `${i.t} ${i.s}`.toLowerCase().includes(w))).slice(0, 12);
+}
+let palSel = 0, palList = [];
+function renderPalette() {
+  palList = paletteItems($('#pq').value);
+  palSel = Math.min(palSel, Math.max(0, palList.length - 1));
+  $('#pres').innerHTML = palList.map((i, n) => `<div class="pi ${n === palSel ? 'on' : ''}" data-pi="${n}"><span>${i.ico}</span><b>${esc(i.t)}</b><small>${esc(i.s)}</small></div>`).join('') || '<div class="empty">Rien trouvé</div>';
+}
+function openPalette() { if (!S) return; $('#pq').value = ''; palSel = 0; renderPalette(); $('#palette').showModal(); $('#pq').focus(); }
+$('#pq').addEventListener('input', () => { palSel = 0; renderPalette(); });
+$('#pq').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown') { palSel = Math.min(palList.length - 1, palSel + 1); renderPalette(); e.preventDefault(); }
+  if (e.key === 'ArrowUp') { palSel = Math.max(0, palSel - 1); renderPalette(); e.preventDefault(); }
+  if (e.key === 'Enter' && palList[palSel]) { $('#palette').close(); palList[palSel].go(); }
+});
+$('#pres').addEventListener('click', (e) => { const i = e.target.closest('[data-pi]'); if (i) { $('#palette').close(); palList[i.dataset.pi].go(); } });
+$('#palette').addEventListener('click', (e) => { if (e.target.id === 'palette') $('#palette').close(); });
+document.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openPalette(); } });
+$('#paletteBtn').onclick = openPalette;
+
 // ---- session drawer --------------------------------------------------------------
 let openSession = null;
 let convoTimer = null;
@@ -617,7 +883,7 @@ function renderChrome() {
 
 function render() {
   renderChrome();
-  for (const fn of [renderHome, renderTasks, renderJira, renderEpics, renderReviews, renderBrutal, renderSessions, renderStack]) {
+  for (const fn of [renderHome, renderTasks, renderJira, renderEpics, renderReviews, renderRadar, renderBrutal, renderSlack, renderSessions, renderStack, renderData, ...(pageFromHash() === 'usage' ? [RENDER.usage] : [])]) {
     try { fn(); } catch (e) { console.error(fn.name, e); }
   }
 }
@@ -679,6 +945,9 @@ document.addEventListener('click', async (e) => {
     if (b.dataset.stackBranch) { await post('/api/stack/switch', { branch: b.dataset.stackBranch }); location.hash = 'stack'; return; }
     if (b.dataset.stackPr) { await post('/api/stack/switch', { pr: b.dataset.stackPr }); location.hash = 'stack'; return; }
     if (b.id === 'customBtn') return openChore({ kind: 'custom', chore: 'custom' });
+    if (b.id === 'standupBtn') return openChore({ kind: 'custom', chore: 'standup' });
+    if (b.id === 'slackSync' || b.id === 'slackDeep') { await post('/api/slack/sync', b.id === 'slackDeep' ? { model: 'sonnet' } : {}); return toast('Tri Slack lancé (≈ 1-2 min)'); }
+    if (b.dataset.slack) { await post(`/api/slack/${encodeURIComponent(b.dataset.slack)}/status`, { status: b.dataset.st }); return; }
     if (b.id === 'syncBtn') { b.disabled = true; await post('/api/sync').finally(() => (b.disabled = false)); return toast('GitHub synchronisé · Jira en cours'); }
     if (b.id === 'stackSwitch') { const [k, v] = $('#stackRef').value.split(/:(.*)/); return post('/api/stack/switch', k === 'p' ? { pr: v } : { branch: v }); }
     if (b.id === 'stackRefresh') return post('/api/stack/refresh');
@@ -698,7 +967,7 @@ let gPressed = 0;
 document.addEventListener('keydown', (e) => {
   if (e.target.matches('input, textarea, select') || e.metaKey || e.ctrlKey) return;
   if (e.key === 'g') { gPressed = Date.now(); return; }
-  const map = { h: 'home', t: 'tasks', j: 'jira', e: 'epics', r: 'reviews', b: 'brutal', s: 'sessions', l: 'stack' };
+  const map = { h: 'home', t: 'tasks', j: 'jira', e: 'epics', r: 'reviews', a: 'radar', b: 'brutal', k: 'slack', s: 'sessions', u: 'usage', l: 'stack', d: 'data' };
   if (Date.now() - gPressed < 800 && map[e.key]) { location.hash = map[e.key]; gPressed = 0; }
 });
 
@@ -718,3 +987,4 @@ function connect() {
 if (new URLSearchParams(location.search).has('snapshot')) fetch('/api/state').then((r) => r.json()).then((d) => { S = d; stackLog = d.stack?.log ?? []; render(); });
 else connect();
 setInterval(() => S && !document.activeElement?.matches('select, textarea, input') && (renderHome(), renderSessions()), 30_000);
+setInterval(() => S && pageFromHash() === 'usage' && loadUsage(true), 60_000);

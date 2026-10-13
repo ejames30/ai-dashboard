@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { db, update, upsert } from './db.mjs';
+import { db, logEvent, update, upsert } from './db.mjs';
 import { gh, sh } from './sh.mjs';
 
 // Sessions are real interactive Claude Code sessions started with `claude --bg` and
@@ -36,6 +36,7 @@ export async function launch({ name, cwd, model, effort, prompt, readOnly, allow
   const id = out.match(/backgrounded · ([0-9a-f]+)/)?.[1];
   if (!id) throw new Error(`claude --bg gave no session id: ${out.slice(0, 300)}`);
   upsert('sessions', { ...row, id, name, cwd, model, effort, prompt, state: 'starting', started_at: new Date().toISOString() });
+  logEvent('session-start', `Session lancée : ${row.title ?? name} (${row.chore}, ${model}/${effort})`, { repo: row.repo, pr: row.pr, session: id });
   return id;
 }
 
@@ -52,7 +53,7 @@ const PRICES = [
   { match: /haiku/, input: 0.1, output: 0.5, cacheRead: 0.01 },
 ];
 
-function costOf(model = '', u) {
+export function costOf(model = '', u) {
   const p = PRICES.find((x) => x.match.test(model)) ?? PRICES[1];
   const w1h = u.cache_creation?.ephemeral_1h_input_tokens ?? 0;
   const w5m = u.cache_creation?.ephemeral_5m_input_tokens ?? Math.max(0, (u.cache_creation_input_tokens ?? 0) - w1h);
@@ -114,7 +115,10 @@ export async function pollSessions(onReviewDone) {
     if (usage) Object.assign(patch, usage);
     if ((TERMINAL.has(state) || state === 'done') && s.state !== state) patch.ended_at = new Date().toISOString();
     if (state === 'done' && ['ai-review', 'auto-review'].includes(s.chore) && !s.posted_url && !s.error) Object.assign(patch, await onReviewDone({ ...s, ...patch }));
-    if (state !== s.state && (state === 'blocked' || state === 'done')) notify(s, state);
+    if (state !== s.state && (state === 'blocked' || state === 'done')) {
+      notify(s, state);
+      logEvent(`session-${state}`, `${s.title ?? s.name} — ${state === 'blocked' ? 'attend ta réponse' : 'terminée'}`, { repo: s.repo, pr: s.pr, session: s.id });
+    }
     if (Object.entries(patch).some(([k, v]) => s[k] !== v)) {
       update('sessions', { id: s.id }, patch);
       changed = true;
