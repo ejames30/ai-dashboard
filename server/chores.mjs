@@ -91,6 +91,17 @@ You can't write files or post anything. End with your review as ONE \`\`\`json f
 Only comment on lines that are part of the diff. Then stop. I'll turn it into a draft review and edit it before submitting.`,
 };
 
+// Same review, but posted on the PR as-is the moment it's done (auto-review of teammates' new PRs).
+export const AUTO_REVIEW_CHORE = {
+  ...REVIEW_CHORE,
+  key: 'auto-review',
+  label: 'Brutal review auto (postée)',
+  prompt: (pr) => REVIEW_CHORE.prompt(pr).replace(
+    "I'll turn it into a draft review and edit it before submitting.",
+    "It is posted on the PR as-is, unedited, so write it for the author: precise, actionable, each finding confirmed in the code, no filler. If the PR is clean, say so with an empty comments array.",
+  ),
+};
+
 // Several tickets in ONE session: cheaper context than N sessions when they touch the same area.
 export const BATCH = {
   key: 'batch',
@@ -109,7 +120,7 @@ Start by reading every ticket (Atlassian MCP), tell me how you'd group or order 
 /** The chore to suggest for a task, or null. */
 export const nextChore = (task) => CHORES.find((c) => c.when(task)) ?? null;
 
-export const choreByKey = (key) => [...CHORES, CUSTOM, REVIEW_CHORE, BATCH].find((c) => c.key === key);
+export const choreByKey = (key) => [...CHORES, CUSTOM, REVIEW_CHORE, AUTO_REVIEW_CHORE, BATCH].find((c) => c.key === key);
 
 export const MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];

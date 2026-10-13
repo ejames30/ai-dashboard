@@ -158,7 +158,9 @@ function renderReviews() {
   $('#cReviews').textContent = reviews.filter((r) => !r.my_review).length || '';
   if (!reviews.length) return ($('#tab-reviews').innerHTML = '<div class="panel"><div class="empty">Aucune PR de collègue ouverte.</div></div>');
   const MY = { PENDING: ['accent', 'brouillon prêt'], APPROVED: ['ok', 'approuvée'], CHANGES_REQUESTED: ['err', 'changes demandés'], COMMENTED: ['info', 'commentée'] };
-  $('#tab-reviews').innerHTML = ['S', 'M', 'L', 'XL'].map((size) => {
+  const a = S.autoReview;
+  const autoLine = a?.enabled ? `<div class="panel"><div class="small" style="padding:10px 14px">🤖 <b>Brutal review auto</b> : chaque nouvelle PR prête de ${a.authors.map((x) => `@${esc(x)}`).join(', ')} est relue et le résultat <b>posté</b> sur la PR (check toutes les 3 min, depuis ${a.since ? new Date(a.since).toLocaleString('fr-FR') : 'le prochain sync'}).</div></div>` : '';
+  $('#tab-reviews').innerHTML = autoLine + ['S', 'M', 'L', 'XL'].map((size) => {
     const group = reviews.filter((r) => r.size === size);
     if (!group.length) return '';
     return `<div class="panel"><h2><span class="size">${size}</span> ${group.length} PR</h2><div class="scroll"><table class="fixed">

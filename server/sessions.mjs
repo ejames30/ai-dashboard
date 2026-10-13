@@ -105,7 +105,7 @@ export async function pollSessions(onReviewDone) {
     const usage = patch.session_id && usageOf(s.cwd, patch.session_id);
     if (usage) Object.assign(patch, usage);
     if ((TERMINAL.has(state) || state === 'done') && s.state !== state) patch.ended_at = new Date().toISOString();
-    if (state === 'done' && s.chore === 'ai-review' && !s.posted_url && !s.error) Object.assign(patch, await onReviewDone({ ...s, ...patch }));
+    if (state === 'done' && ['ai-review', 'auto-review'].includes(s.chore) && !s.posted_url && !s.error) Object.assign(patch, await onReviewDone({ ...s, ...patch }));
     if (state !== s.state && (state === 'blocked' || state === 'done')) notify(s, state);
     if (Object.entries(patch).some(([k, v]) => s[k] !== v)) {
       update('sessions', { id: s.id }, patch);
@@ -183,7 +183,7 @@ export async function stopSession(id) {
 }
 
 // ---- AI review → pending GitHub review -------------------------------------
-const SEVERITY = { critical: '🚨 **Critique**', warning: '⚠️ **Warning**', suggestion: '💡 **Suggestion**' };
+const SEVERITY = { critical: '🚨 **Critical**', warning: '⚠️ **Warning**', suggestion: '💡 **Suggestion**' };
 
 /** Turn the review session's JSON into a PENDING review: visible only to me until I submit it. */
 /** The last ```json block of the session's final assistant messages. */
@@ -206,23 +206,34 @@ function reviewFromTranscript(session) {
   return null;
 }
 
+/** Posts the review: PENDING (only I see it) for 'ai-review', submitted as a comment review for 'auto-review'. */
 export async function postDraftReview(session, pr) {
+  const publish = session.chore === 'auto-review';
   let review;
   try { review = reviewFromTranscript(session); } catch (e) { return { error: `invalid review JSON: ${e.message}` }; }
   if (!review) return { error: 'no ```json review in the final message' };
   const comments = (review.comments ?? []).filter((c) => c.path && Number.isInteger(c.line)).map((c) => ({
     path: c.path, line: c.line, side: 'RIGHT', body: `${SEVERITY[c.severity] ?? ''}\n\n${c.body}`.trim(),
   }));
-  const summary = `${review.summary ?? ''}\n\n<sub>Review drafted with Claude, checked by me before submitting.</sub>`;
+  const footer = publish ? '<sub>🤖 Automated brutal review (Claude), posted by Eric\'s AI Dashboard.</sub>' : '<sub>Review drafted with Claude, checked by me before submitting.</sub>';
+  const summary = `${review.summary ?? ''}\n\n${footer}`;
+  const event = publish ? { event: 'COMMENT' } : {};
   const post = (payload) => gh(['api', '-X', 'POST', `repos/${session.repo}/pulls/${pr.number}/reviews`, '--input', '-'], { input: JSON.stringify(payload) });
   try {
-    await post({ commit_id: pr.head_sha, body: summary, comments });
+    await post({ commit_id: pr.head_sha, body: summary, comments, ...event });
   } catch (e) {
-    if (/pending review/i.test(e.message)) return { error: 'you already have a pending review on this PR — submit or delete it first' };
+    if (/pending review/i.test(e.message) && !publish) return { error: 'you already have a pending review on this PR — submit or delete it first' };
     // A line outside a diff hunk makes GitHub reject the whole review: keep everything, inline in the body.
     const inline = comments.map((c) => `**\`${c.path}:${c.line}\`** — ${c.body}`).join('\n\n---\n\n');
-    try { await post({ commit_id: pr.head_sha, body: `${summary}\n\n${inline}` }); }
-    catch (e2) { return { error: e2.message.slice(0, 300) }; }
+    const body = `${summary}\n\n${inline}`;
+    try { await post({ commit_id: pr.head_sha, body, ...event }); }
+    catch (e2) {
+      // A pending review of mine blocks a second review: a plain PR comment still gets through.
+      if (!publish) return { error: e2.message.slice(0, 300) };
+      try { await gh(['pr', 'comment', String(pr.number), '-R', session.repo, '--body-file', '-'], { input: body }); }
+      catch (e3) { return { error: e3.message.slice(0, 300) }; }
+      return { posted_url: pr.url, error: null };
+    }
   }
   return { posted_url: `${pr.url}/files`, error: null };
 }

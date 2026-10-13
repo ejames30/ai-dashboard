@@ -7,9 +7,10 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BATCH, CHORES, CUSTOM, EFFORTS, MODELS, REVIEW_CHORE, choreByKey, nextChore } from './chores.mjs';
+import { AUTO_REVIEW_CHORE, BATCH, CHORES, CUSTOM, EFFORTS, MODELS, REVIEW_CHORE, choreByKey, nextChore } from './chores.mjs';
 import { config, repoBySlug, sizeOf } from './config.mjs';
 import { db, kv } from './db.mjs';
+import { autoReviewState, runAutoReview } from './autoreview.mjs';
 import { syncGithub } from './github.mjs';
 import { jiraSource, resetJiraToken, syncJira } from './jira.mjs';
 import { launch, listSessions, openInTerminal, pollSessions, postDraftReview, replySession, stopSession, transcript } from './sessions.mjs';
@@ -48,7 +49,7 @@ function buildTasks() {
 }
 
 function buildReviews() {
-  const sessions = listSessions().filter((s) => s.chore === 'ai-review');
+  const sessions = listSessions().filter((s) => ['ai-review', 'auto-review'].includes(s.chore));
   return db.prepare("SELECT * FROM prs WHERE kind = 'review'").all().map((pr) => ({
     ...pr,
     lines: pr.additions + pr.deletions,
@@ -66,7 +67,8 @@ async function state() {
     stack: await stackStatus(),
     sync: kv.get('sync') ?? null,
     jira: { ...(kv.get('jira') ?? {}), source: await jiraSource(), site: config.jira.site, service: config.jira.keychainService, email: config.email },
-    chores: [...CHORES, CUSTOM, REVIEW_CHORE, BATCH].map(({ key, label, model, effort }) => ({ key, label, model, effort })),
+    autoReview: autoReviewState(),
+    chores: [...CHORES, CUSTOM, REVIEW_CHORE, AUTO_REVIEW_CHORE, BATCH].map(({ key, label, model, effort }) => ({ key, label, model, effort })),
     models: MODELS,
     efforts: EFFORTS,
   };
@@ -90,6 +92,9 @@ async function sync({ force = false } = {}) {
   syncing = true;
   const errors = [];
   await syncGithub().catch((e) => errors.push(`GitHub: ${e.message}`));
+  await runAutoReview(startAutoReview)
+    .then((n) => n.length && console.log(`auto-review started for #${n.join(', #')}`))
+    .catch((e) => errors.push(`Auto-review: ${e.message}`));
   kv.set('sync', { at: new Date().toISOString(), errors });
   syncing = false;
   pushState();
@@ -146,6 +151,17 @@ async function startSession(body) {
       chore: d.chore.key, task: d.task?.key ?? null, tasks: d.tasks ? JSON.stringify(d.tasks.map((t) => t.key)) : null,
       repo: repo.slug, pr: d.pr?.number ?? d.task?.pr?.number ?? null,
     },
+  });
+}
+
+async function startAutoReview(pr) {
+  const repo = repoBySlug(pr.repo);
+  const c = AUTO_REVIEW_CHORE;
+  return launch({
+    name: `eric-ai-review-${pr.number}-auto-review`,
+    cwd: await reviewWorktree(repo, pr), model: c.model, effort: c.effort, prompt: c.prompt(pr),
+    readOnly: true,
+    row: { chore: c.key, task: null, tasks: null, repo: repo.slug, pr: pr.number },
   });
 }
 

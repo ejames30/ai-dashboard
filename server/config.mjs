@@ -39,6 +39,13 @@ export const config = {
     mcpEveryMs: 2 * 3600_000, // one connector sync ≈ $0.25 for ~190 issues
   },
 
+  // New ready PRs from these teammates get a brutal review POSTED automatically (see autoreview.mjs).
+  autoReview: {
+    enabled: true,
+    authors: ['malekhassani', 'MarshMallowFR', 'tobiasz'],
+    maxConcurrent: 3,
+  },
+
   syncEveryMs: 3 * 60_000,
   sessionPollMs: 5_000,
 
