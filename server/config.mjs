@@ -35,6 +35,8 @@ export const config = {
     //   security add-generic-password -s ai-dashboard-jira -a eric@hivebrite.com -w <token>
     keychainService: 'ai-dashboard-jira',
     jql: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC',
+    // Without a token, issues come through a headless Claude + the Atlassian connector: slower and not free, so less often.
+    mcpEveryMs: 2 * 3600_000, // one connector sync ≈ $0.25 for ~190 issues
   },
 
   syncEveryMs: 3 * 60_000,

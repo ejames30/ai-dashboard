@@ -7,12 +7,12 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CHORES, CUSTOM, EFFORTS, MODELS, REVIEW_CHORE, choreByKey, nextChore } from './chores.mjs';
+import { BATCH, CHORES, CUSTOM, EFFORTS, MODELS, REVIEW_CHORE, choreByKey, nextChore } from './chores.mjs';
 import { config, repoBySlug, sizeOf } from './config.mjs';
 import { db, kv } from './db.mjs';
 import { syncGithub } from './github.mjs';
-import { jiraConfigured, resetJiraToken, syncJira } from './jira.mjs';
-import { launch, listSessions, pollSessions, postDraftReview, stopSession } from './sessions.mjs';
+import { jiraSource, resetJiraToken, syncJira } from './jira.mjs';
+import { launch, listSessions, pollSessions, postDraftReview, replySession, stopSession, transcript } from './sessions.mjs';
 import { onStackLog, refreshStack, stackStatus, startStack, stopStack, switchStack } from './stack.mjs';
 import { reviewWorktree, scratchWorktree, taskWorktree } from './worktrees.mjs';
 
@@ -31,15 +31,18 @@ function buildTasks() {
     if (!t.pr || pr.number > t.pr.number) t.pr = pr; // several PRs per ticket: the latest leads
     tasks.set(key, t);
   }
+  // A multi-ticket session counts for each of its tickets, its cost split evenly between them.
+  const keysOf = (s) => { try { return s.tasks ? JSON.parse(s.tasks) : s.task ? [s.task] : []; } catch { return []; } };
   return [...tasks.values()].map((t) => {
-    const own = sessions.filter((s) => s.task === t.key);
+    const own = sessions.filter((s) => keysOf(s).includes(t.key));
+    const cost = own.reduce((a, s) => a + (s.cost_usd ?? 0) / Math.max(1, keysOf(s).length), 0);
     t.doneChores = new Set(own.filter((s) => s.state === 'done').map((s) => s.chore));
     const next = nextChore(t);
     const lines = t.pr ? t.pr.additions + t.pr.deletions : 0;
     return {
       key: t.key, issue: t.issue, pr: t.pr, size: t.pr ? sizeOf(lines) : null, lines,
       next: next && { key: next.key, label: next.label },
-      sessions: own.slice(0, 5),
+      sessions: own.slice(0, 5), sessionCount: own.length, cost,
     };
   }).sort((a, b) => (b.pr?.updated ?? b.issue?.updated ?? '').localeCompare(a.pr?.updated ?? a.issue?.updated ?? ''));
 }
@@ -62,8 +65,8 @@ async function state() {
     sessions: listSessions(),
     stack: await stackStatus(),
     sync: kv.get('sync') ?? null,
-    jira: { configured: await jiraConfigured(), site: config.jira.site, service: config.jira.keychainService, email: config.email },
-    chores: [...CHORES, CUSTOM, REVIEW_CHORE].map(({ key, label, model, effort }) => ({ key, label, model, effort })),
+    jira: { ...(kv.get('jira') ?? {}), source: await jiraSource(), site: config.jira.site, service: config.jira.keychainService, email: config.email },
+    chores: [...CHORES, CUSTOM, REVIEW_CHORE, BATCH].map(({ key, label, model, effort }) => ({ key, label, model, effort })),
     models: MODELS,
     efforts: EFFORTS,
   };
@@ -79,12 +82,14 @@ onStackLog((line) => broadcast('stacklog', line));
 
 // ---- sync loops --------------------------------------------------------------
 let syncing = false;
-async function sync() {
+async function sync({ force = false } = {}) {
+  // Jira can take ~40s through the connector: it runs on its own and pushes when it lands.
+  syncJira({ force }).catch((e) => console.error('jira', e.message)).finally(pushState);
+  pushState();
   if (syncing) return;
   syncing = true;
   const errors = [];
   await syncGithub().catch((e) => errors.push(`GitHub: ${e.message}`));
-  await syncJira().catch((e) => errors.push(`Jira: ${e.message}`));
   kv.set('sync', { at: new Date().toISOString(), errors });
   syncing = false;
   pushState();
@@ -109,6 +114,12 @@ function findTask(key) {
 }
 
 function choreDefaults(body) {
+  if (body.kind === 'batch') {
+    const keys = (Array.isArray(body.tasks) ? body.tasks : String(body.tasks ?? '').split(',')).filter(Boolean);
+    if (keys.length < 2) throw httpError(400, 'pick at least 2 tickets');
+    const tasks = keys.map(findTask);
+    return { chore: BATCH, tasks, prompt: BATCH.prompt(tasks) };
+  }
   if (body.kind === 'review') {
     const pr = db.prepare("SELECT * FROM prs WHERE kind = 'review' AND repo = ? AND number = ?").get(body.repo, Number(body.pr));
     if (!pr) throw httpError(404, 'PR not found');
@@ -125,13 +136,16 @@ async function startSession(body) {
   const effort = EFFORTS.includes(body.effort) ? body.effort : d.chore.effort;
   const prompt = (body.prompt ?? d.prompt).trim();
   const repo = repoBySlug(d.pr?.repo ?? d.task?.pr?.repo ?? config.repos[0].slug);
-  const cwd = d.pr ? await reviewWorktree(repo, d.pr) : d.task ? await taskWorktree(repo, d.task) : await scratchWorktree(repo);
-  const label = d.pr ? `review-${d.pr.number}` : d.task ? d.task.key : 'custom';
+  const cwd = d.pr ? await reviewWorktree(repo, d.pr) : d.task ? await taskWorktree(repo, d.task) : await scratchWorktree(repo, d.tasks ? 'batch' : 'custom');
+  const label = d.pr ? `review-${d.pr.number}` : d.task ? d.task.key : d.tasks ? `${d.tasks.length}-tickets` : 'custom';
   return launch({
     name: `eric-ai-${label}-${d.chore.key}`.slice(0, 60),
     cwd, model, effort, prompt,
     readOnly: !!d.pr,
-    row: { chore: d.chore.key, task: d.task?.key ?? null, repo: repo.slug, pr: d.pr?.number ?? d.task?.pr?.number ?? null },
+    row: {
+      chore: d.chore.key, task: d.task?.key ?? null, tasks: d.tasks ? JSON.stringify(d.tasks.map((t) => t.key)) : null,
+      repo: repo.slug, pr: d.pr?.number ?? d.task?.pr?.number ?? null,
+    },
   });
 }
 
@@ -165,6 +179,12 @@ createServer(async (req, res) => {
       const d = choreDefaults(Object.fromEntries(searchParams));
       return json(res, 200, { key: d.chore.key, label: d.chore.label, model: d.chore.model, effort: d.chore.effort, prompt: d.prompt });
     }
+    const tr = pathname.match(/^\/api\/sessions\/([0-9a-f]+)\/transcript$/);
+    if (req.method === 'GET' && tr) {
+      const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(tr[1]);
+      if (!session) throw httpError(404, 'session not found');
+      return json(res, 200, { session, items: transcript(session) });
+    }
     if (req.method === 'GET' && pathname === '/live') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
       clients.add(res);
@@ -176,8 +196,17 @@ createServer(async (req, res) => {
       // Custom header → a cross-site page can't send it without a CORS preflight we never answer.
       if (req.headers['x-dashboard'] !== '1') return json(res, 403, { error: 'missing X-Dashboard header' });
       const body = await readBody(req);
-      if (pathname === '/api/sync') { resetJiraToken(); await sync(); return json(res, 200, { ok: true }); }
+      if (pathname === '/api/sync') { resetJiraToken(); await sync({ force: true }); return json(res, 200, { ok: true }); }
       if (pathname === '/api/sessions') { const id = await startSession(body); pushState(); return json(res, 200, { id }); }
+      const reply = pathname.match(/^\/api\/sessions\/([0-9a-f]+)\/reply$/);
+      if (reply) {
+        const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(reply[1]);
+        if (!session) throw httpError(404, 'session not found');
+        if (!String(body.text ?? '').trim()) throw httpError(400, 'empty message');
+        await replySession(session, body.text.trim());
+        pushState();
+        return json(res, 200, { ok: true });
+      }
       const stop = pathname.match(/^\/api\/sessions\/([0-9a-f]+)\/stop$/);
       if (stop) { await stopSession(stop[1]); pushState(); return json(res, 200, { ok: true }); }
       const st = pathname.match(/^\/api\/stack\/([a-z]+)$/);

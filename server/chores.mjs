@@ -9,7 +9,7 @@ const ticket = (t) => (t.issue ? `Jira ${t.issue.key} — "${t.issue.summary}" (
 
 const PREAMBLE = `You are running in a dedicated git worktree for this task, started from my local cockpit.
 Follow the repo's AGENTS.md files. If node_modules is missing, run \`pnpm install\` first.
-When you need a decision from me, ask and wait — I answer from claude.ai.`;
+When you need a decision from me, ask and wait — I answer from my dashboard or claude.ai.`;
 
 export const CHORES = [
   {
@@ -91,10 +91,25 @@ You can't write files or post anything. End with your review as ONE \`\`\`json f
 Only comment on lines that are part of the diff. Then stop. I'll turn it into a draft review and edit it before submitting.`,
 };
 
+// Several tickets in ONE session: cheaper context than N sessions when they touch the same area.
+export const BATCH = {
+  key: 'batch',
+  label: 'Session groupée',
+  model: 'opus',
+  effort: 'high',
+  prompt: (tasks) => `${PREAMBLE}
+
+Handle these ${tasks.length} tickets in this one session, one after the other:
+${tasks.map((t, i) => `${i + 1}. ${ticket(t)}${t.pr ? ` — already has ${prRef(t)}` : ''}`).join('\n')}
+
+This worktree is detached on origin/master. Give each ticket its own branch (\`<KEY>-<short-slug>\`) and its own PR — never mix tickets in one branch.
+Start by reading every ticket (Atlassian MCP), tell me how you'd group or order them and what each needs, and wait for my go.`,
+};
+
 /** The chore to suggest for a task, or null. */
 export const nextChore = (task) => CHORES.find((c) => c.when(task)) ?? null;
 
-export const choreByKey = (key) => [...CHORES, CUSTOM, REVIEW_CHORE].find((c) => c.key === key);
+export const choreByKey = (key) => [...CHORES, CUSTOM, REVIEW_CHORE, BATCH].find((c) => c.key === key);
 
 export const MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];

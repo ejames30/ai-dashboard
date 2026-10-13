@@ -33,6 +33,25 @@ export async function launch({ name, cwd, model, effort, prompt, readOnly, row }
 
 export const listSessions = () => db.prepare('SELECT * FROM sessions ORDER BY started_at DESC LIMIT 300').all();
 
+// ---- cost ------------------------------------------------------------------
+// Anthropic API list prices, $ per million tokens (claude-api skill, cached 2026-10-06).
+// Cache writes: 1.25x input for the 5-minute TTL, 2x for 1 hour. On a Claude Enterprise
+// seat this is an ESTIMATE of what the same tokens would cost on the API, not a bill.
+const PRICES = [
+  { match: /fable|mythos/, input: 10, output: 50, cacheRead: 0.25 },
+  { match: /opus/, input: 4, output: 20, cacheRead: 0.2 },
+  { match: /sonnet/, input: 2, output: 10, cacheRead: 0.2 },
+  { match: /haiku/, input: 0.1, output: 0.5, cacheRead: 0.01 },
+];
+
+function costOf(model = '', u) {
+  const p = PRICES.find((x) => x.match.test(model)) ?? PRICES[1];
+  const w1h = u.cache_creation?.ephemeral_1h_input_tokens ?? 0;
+  const w5m = u.cache_creation?.ephemeral_5m_input_tokens ?? Math.max(0, (u.cache_creation_input_tokens ?? 0) - w1h);
+  return ((u.input_tokens ?? 0) * p.input + (u.output_tokens ?? 0) * p.output + (u.cache_read_input_tokens ?? 0) * p.cacheRead
+    + w5m * p.input * 1.25 + w1h * p.input * 2) / 1e6;
+}
+
 // ---- polling ---------------------------------------------------------------
 const transcriptPath = (cwd, sessionId) =>
   join(homedir(), '.claude/projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`);
@@ -41,7 +60,7 @@ function usageOf(cwd, sessionId) {
   const path = transcriptPath(cwd, sessionId);
   if (!existsSync(path)) return null;
   const seen = new Set();
-  const u = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, turns: 0 };
+  const u = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 };
   for (const line of readFileSync(path, 'utf8').split('\n')) {
     if (!line.includes('"usage"')) continue;
     let msg;
@@ -52,6 +71,7 @@ function usageOf(cwd, sessionId) {
     u.output_tokens += msg.usage.output_tokens ?? 0;
     u.cache_read_tokens += msg.usage.cache_read_input_tokens ?? 0;
     u.cache_write_tokens += msg.usage.cache_creation_input_tokens ?? 0;
+    u.cost_usd += costOf(msg.model, msg.usage);
     u.turns += 1;
   }
   return u;
@@ -60,6 +80,13 @@ function usageOf(cwd, sessionId) {
 async function rcUrl(id) {
   const logs = await sh('claude', ['logs', id], { timeout: 20_000 }).catch(() => '');
   return logs.match(/https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]+/)?.[0] ?? null;
+}
+
+// A macOS notification when a session needs me or has finished, so the dashboard needn't stay in view.
+function notify(s, state) {
+  const title = state === 'blocked' ? 'Claude attend ta réponse' : 'Session terminée';
+  const msg = `${s.name}`.replace(/["\\]/g, '');
+  sh('osascript', ['-e', `display notification "${msg}" with title "Eric's AI Dashboard" subtitle "${title}" sound name "Glass"`]).catch(() => {});
 }
 
 /** Refresh every non-terminal session. Returns true when something changed. */
@@ -79,12 +106,56 @@ export async function pollSessions(onReviewDone) {
     if (usage) Object.assign(patch, usage);
     if ((TERMINAL.has(state) || state === 'done') && s.state !== state) patch.ended_at = new Date().toISOString();
     if (state === 'done' && s.chore === 'ai-review' && !s.posted_url && !s.error) Object.assign(patch, await onReviewDone({ ...s, ...patch }));
+    if (state !== s.state && (state === 'blocked' || state === 'done')) notify(s, state);
     if (Object.entries(patch).some(([k, v]) => s[k] !== v)) {
       update('sessions', { id: s.id }, patch);
       changed = true;
     }
   }
   return changed;
+}
+
+// ---- conversation from the dashboard ---------------------------------------
+const toolSummary = (name, input = {}) =>
+  String(input.command ?? input.file_path ?? input.pattern ?? input.description ?? input.prompt ?? input.query ?? '').slice(0, 200);
+
+/** The session's conversation, slimmed for display: my messages, Claude's text, its tool calls. */
+export function transcript(session) {
+  if (!session.session_id) return [];
+  const path = transcriptPath(session.cwd, session.session_id);
+  if (!existsSync(path)) return [];
+  const items = [];
+  const seen = new Set();
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    let e;
+    try { e = JSON.parse(line); } catch { continue; }
+    const m = e.message;
+    if (!m || (e.type !== 'user' && e.type !== 'assistant') || e.isMeta) continue;
+    const blocks = typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : m.content ?? [];
+    for (const b of blocks) {
+      const key = `${m.id ?? e.uuid}:${b.id ?? b.text?.slice(0, 40)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (b.type === 'text' && b.text.trim() && !b.text.startsWith('<')) items.push({ role: e.type, text: b.text, ts: e.timestamp });
+      if (b.type === 'tool_use') items.push({ role: 'tool', name: b.name, text: toolSummary(b.name, b.input), ts: e.timestamp });
+    }
+  }
+  return items.slice(-300);
+}
+
+/**
+ * Send a message to a session from the dashboard. A running or blocked session is stopped
+ * first: `claude --bg --resume` with NO flags then wakes the same session (same id, saved
+ * model/settings) with my message as the next turn. Passing flags would start a copy instead.
+ */
+export async function replySession(session, text) {
+  if (!session.session_id) throw new Error('session has no id yet');
+  if (!['done', 'idle', 'stopped', 'gone'].includes(session.state)) {
+    await sh('claude', ['stop', session.id]).catch(() => {});
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  await sh('claude', ['--bg', '--resume', session.session_id, '--', text], { cwd: session.cwd, timeout: 60_000 });
+  update('sessions', { id: session.id }, { state: 'running', ended_at: null });
 }
 
 export async function stopSession(id) {

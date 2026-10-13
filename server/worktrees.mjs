@@ -49,9 +49,9 @@ export async function reviewWorktree(repo, pr) {
   return dir;
 }
 
-/** Fresh detached worktree for a free-form prompt with no task. */
-export async function scratchWorktree(repo) {
-  const dir = wtDir(repo, `custom-${Date.now()}`);
+/** Fresh detached worktree on origin/<base>: a free-form prompt, or a multi-ticket session. */
+export async function scratchWorktree(repo, prefix = 'custom') {
+  const dir = wtDir(repo, `${prefix}-${Date.now()}`);
   await git(repo.path, ['fetch', '--quiet', 'origin', repo.base]);
   await git(repo.path, ['worktree', 'add', '--quiet', '--detach', dir, `origin/${repo.base}`]);
   return dir;

@@ -9,7 +9,7 @@ export const db = new DatabaseSync(join(config.dataDir, 'ai-dashboard.db'));
 db.exec(`
   PRAGMA journal_mode = WAL;
 
-  -- Jira issues assigned to me (only filled when a Jira token is configured).
+  -- Jira issues assigned to me (REST with a token, else the Atlassian connector).
   CREATE TABLE IF NOT EXISTS issues (
     key TEXT PRIMARY KEY, summary TEXT, status TEXT, status_category TEXT,
     type TEXT, priority TEXT, url TEXT, updated TEXT, synced_at TEXT
@@ -37,6 +37,14 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 `);
+
+// Columns added after the first release: ALTER is a no-op error once they exist.
+for (const sql of [
+  'ALTER TABLE sessions ADD COLUMN cost_usd REAL DEFAULT 0',
+  'ALTER TABLE sessions ADD COLUMN tasks TEXT', // JSON array of ticket keys for a multi-ticket session
+]) {
+  try { db.exec(sql); } catch {}
+}
 
 export const kv = {
   get: (k) => {

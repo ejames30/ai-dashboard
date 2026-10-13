@@ -11,11 +11,13 @@
   <h1>Eric's AI Dashboard</h1>
   <nav id="tabs">
     <button data-tab="tasks" class="on">Tâches <span class="count" id="cTasks"></span></button>
+    <button data-tab="jira">Jira <span class="count" id="cJira"></span></button>
     <button data-tab="reviews">Reviews <span class="count" id="cReviews"></span></button>
     <button data-tab="sessions">Sessions <span class="count" id="cSessions"></span></button>
     <button data-tab="stack">Stack <span class="dot" id="stackDot"></span></button>
   </nav>
   <span class="spacer"></span>
+  <span class="pill-cost" id="costToday" title="Estimation au prix API des sessions lancées aujourd'hui"></span>
   <span class="muted small" id="syncInfo"></span>
   <button id="syncBtn">Sync</button>
   <button class="primary" id="customBtn">+ Prompt libre</button>
@@ -25,6 +27,16 @@
 
 <main>
   <section id="tab-tasks" class="tab on"></section>
+  <section id="tab-jira" class="tab">
+    <div class="toolbar">
+      <input id="jSearch" type="search" placeholder="Rechercher un ticket (clé ou titre)…">
+      <select id="jProject"></select>
+      <div class="chips" id="jCats"></div>
+      <span class="spacer"></span>
+      <span class="muted small" id="jInfo"></span>
+    </div>
+    <div id="jList"></div>
+  </section>
   <section id="tab-reviews" class="tab"></section>
   <section id="tab-sessions" class="tab"></section>
   <section id="tab-stack" class="tab"></section>
@@ -47,6 +59,19 @@
   </form>
 </dialog>
 
+<dialog id="sessionModal" class="drawer">
+  <div class="drawer-head">
+    <div><h2 id="sTitle"></h2><div class="muted small" id="sMeta"></div></div>
+    <div class="row-actions"><span id="sLinks"></span><button id="sClose">Fermer</button></div>
+  </div>
+  <div class="convo" id="sConvo"></div>
+  <form id="sReply" class="reply">
+    <textarea id="sText" rows="3" placeholder="Répondre à Claude… (⌘↩ pour envoyer)"></textarea>
+    <div class="actions"><span class="muted small" id="sHint"></span><button class="primary" id="sSend">Envoyer</button></div>
+  </form>
+</dialog>
+
+<div id="selbar"></div>
 <div id="toast"></div>
 <script src="/app.js" type="module"></script>
 </body>
