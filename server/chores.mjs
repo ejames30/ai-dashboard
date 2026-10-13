@@ -135,6 +135,25 @@ export const STANDUP = {
 Read only; don't change anything. End with the message ready to paste.`,
 };
 
+// Digging into an innovation-corner idea: study, then prototype only after my go.
+export const IDEA = {
+  key: 'idea',
+  label: "Creuser l'idée",
+  model: 'opus',
+  effort: 'high',
+  prompt: (i) => `${PREAMBLE}
+
+Explore this idea from my innovation corner (${i.category}, effort ${i.effort}, impact ${i.impact}/5):
+**${i.title}**
+${i.pitch}
+Why now: ${i.why}
+First step suggested: ${i.first_step}
+
+1. Check it against the real code and constraints (AGENTS.md, OTA vs native, flags, CI cost rules). Say plainly if it's a bad idea and why.
+2. If it holds: a short design (what changes where), risks, and an estimate; and the Jira ticket text I could file (title + description) — don't file it.
+3. Wait for my go before writing any code; then prototype it on a branch named after the idea.`,
+};
+
 // Several tickets in ONE session: cheaper context than N sessions when they touch the same area.
 export const BATCH = {
   key: 'batch',
@@ -153,7 +172,7 @@ Start by reading every ticket (Atlassian MCP), tell me how you'd group or order 
 /** The chore to suggest for a task, or null. */
 export const nextChore = (task) => CHORES.find((c) => c.when(task)) ?? null;
 
-export const choreByKey = (key) => [...CHORES, CUSTOM, REVIEW_CHORE, AUTO_REVIEW_CHORE, BATCH, EPIC_PLAN, STANDUP].find((c) => c.key === key);
+export const choreByKey = (key) => [...CHORES, CUSTOM, REVIEW_CHORE, AUTO_REVIEW_CHORE, BATCH, EPIC_PLAN, STANDUP, IDEA].find((c) => c.key === key);
 
 export const MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];

@@ -461,3 +461,22 @@ dialog.side-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100vh; width
 .wtlist { display: flex; flex-direction: column; gap: 6px; }
 .wtrow { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel2); }
 .wtrow b { font-size: 13px; }
+
+/* innovation */
+.ideas-hero { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.ideas-hero h2 { font-size: 21px; margin: 4px 0; }
+.ideas { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }
+.idea { display: flex; flex-direction: column; gap: 10px; padding: 18px; border-radius: var(--r); background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow); position: relative; overflow: hidden; }
+.idea::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; background: var(--c); }
+.idea::after { content: ""; position: absolute; right: -40px; top: -40px; width: 140px; height: 140px; border-radius: 50%; background: var(--c); opacity: .07; }
+.idea.st-dismissed { opacity: .5; } .idea.st-kept { border-color: color-mix(in srgb, var(--c) 50%, transparent); }
+.idea-h { display: flex; gap: 8px; align-items: center; }
+.idea-h .ico { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--c-s); color: var(--c); }
+.imp { color: var(--c); font-size: 10px; letter-spacing: 1px; } .imp em { font-style: normal; color: var(--line2); }
+.idea h3 { margin: 0; font-size: 16px; line-height: 1.3; letter-spacing: -.01em; }
+.idea p { margin: 0; color: var(--text); font-size: 13.5px; line-height: 1.55; }
+.idea-why { font-size: 12.5px; color: var(--muted); padding: 8px 10px; border-radius: 9px; background: var(--bg2); }
+.idea-why b { color: var(--c); display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 2px; }
+.idea-step { font-size: 13px; font-weight: 600; color: var(--c); }
+.idea-src { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11.5px; } .idea-src > * { background: var(--bg2); padding: 1px 7px; border-radius: 6px; }
+.idea-f { display: flex; gap: 6px; align-items: center; margin-top: auto; padding-top: 4px; }

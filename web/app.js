@@ -40,6 +40,7 @@ $('#themeBtn').onclick = () => {
 // ---- pages -------------------------------------------------------------------
 const PAGES = {
   home: ["Aujourd'hui", 'Tout ce qui attend une action, au même endroit'],
+  ideas: ['Innovation', 'Chaque matin, des idées concrètes pour rendre l’app et la vie de l’équipe meilleures'],
   standup: ['Stand-up', 'Écrit tout seul chaque jour de semaine à 9h à partir de ce que tu as vraiment fait — ou à la demande'],
   tasks: ['Tâches', 'Tes PR et tes tickets en cours, avec la prochaine action suggérée'],
   jira: ['Jira', 'Tous les tickets qui te sont assignés'],
@@ -608,7 +609,7 @@ function renderStandup() {
   const list = S.standups ?? [];
   const pending = list.find((x) => x.pending);
   const cur = list.find((x) => x.id === standupSel) ?? list.find((x) => x.result) ?? null;
-  $('#standupDot').className = `dot ${pending ? 'live' : list[0]?.day === new Date().toISOString().slice(0, 10) && list[0]?.result ? 'ok' : ''}`;
+  $('#standupDot').className = `dot ${pending ? 'live' : list[0]?.day === new Date().toLocaleDateString('sv-SE') && list[0]?.result ? 'ok' : ''}`;
   const r = cur?.result, f = cur?.facts;
   const commits = f ? f.pushed.reduce((n, p) => n + p.commits.length, 0) : 0;
   const sect = (title, ico, cls, items, empty) => `<div class="su-sect ${cls}"><h3><span>${ico}</span>${title}</h3>${items?.length ? `<ul>${items.map((i) => `<li class="md">${md(i)}</li>`).join('')}</ul>` : `<div class="faint">${empty}</div>`}</div>`;
@@ -1220,6 +1221,65 @@ document.addEventListener('click', async (e) => {
   if (card && pageFromHash() === 'fleet' && !e.target.closest('a, button')) openDrawer(`fleet:${card.dataset.fleet}`);
 });
 
+// ---- innovation corner ----------------------------------------------------------------------
+const CAT_STYLE = { feature: ['pink', '✦'], devxp: ['violet', '⌘'], ci: ['sky', '⟳'], quality: ['emerald', '✓'], perf: ['amber', '⚡'], ai: ['violet', '◈'], team: ['amber', '☺'] };
+const IDEA_STATUS = { new: 'Nouvelles', kept: 'Gardées', launched: 'En exploration', done: 'Faites', dismissed: 'Écartées' };
+function ideaCard(i, cats) {
+  const [c, ico] = CAT_STYLE[i.category] ?? ['violet', '•'];
+  return `<div class="idea c-${c} st-${i.status}">
+    <div class="idea-h"><span class="ico">${ico}</span><span class="badge" style="color:var(--c);background:var(--c-s);border-color:transparent">${esc(cats[i.category] ?? i.category)}</span>
+      <span class="spacer"></span><span class="imp" title="Impact">${'●'.repeat(i.impact)}<em>${'●'.repeat(5 - i.impact)}</em></span><span class="badge">effort ${esc(i.effort)}</span></div>
+    <h3>${esc(i.title)}</h3>
+    <p>${esc(i.pitch)}</p>
+    ${i.why ? `<div class="idea-why"><b>Pourquoi maintenant</b> ${esc(i.why)}</div>` : ''}
+    ${i.first_step ? `<div class="idea-step">→ ${esc(i.first_step)}</div>` : ''}
+    ${i.sources?.length ? `<div class="idea-src">${i.sources.slice(0, 4).map((s) => /^https?:/.test(s) ? `<a href="${esc(s)}" target="_blank">${esc(new URL(s).host)}</a>` : `<span class="mono">${esc(s)}</span>`).join('')}</div>` : ''}
+    <div class="idea-f"><span class="faint small">${new Date(i.created_at).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })}</span><span class="spacer"></span>
+      ${i.status !== 'dismissed' ? `<button class="ghost" data-idea="${i.id}" data-ist="dismissed" title="Écarter">✕</button>` : `<button class="ghost" data-idea="${i.id}" data-ist="new">Restaurer</button>`}
+      ${i.status === 'new' ? `<button data-idea="${i.id}" data-ist="kept">♥ Garder</button>` : ''}
+      ${['launched', 'kept'].includes(i.status) ? `<button class="ghost" data-idea="${i.id}" data-ist="done">✓ Faite</button>` : ''}
+      <button class="primary" data-idea-dig="${i.id}">▶ Creuser avec Claude</button></div></div>`;
+}
+function renderIdeas() {
+  const st = S.ideas ?? { ideas: [], runs: [], categories: {} };
+  const cats = st.categories;
+  const all = st.ideas;
+  const run = st.runs[0];
+  const pending = run && !run.done;
+  filterBar('ideas', {
+    search: 'Rechercher une idée…',
+    chips: [
+      { name: 'status', options: [['new', 'Nouvelles', all.filter((i) => i.status === 'new').length], ['kept', 'Gardées', all.filter((i) => i.status === 'kept').length], ['launched', 'En exploration', all.filter((i) => i.status === 'launched').length], ['done', 'Faites', all.filter((i) => i.status === 'done').length], ['dismissed', 'Écartées', all.filter((i) => i.status === 'dismissed').length], ['all', 'Toutes', all.length]] },
+      { name: 'cat', options: [['all', 'Catégorie'], ...Object.entries(cats).map(([k, l]) => [k, l, all.filter((i) => i.category === k).length])] },
+      { name: 'sort', options: [['recent', 'Récentes'], ['impact', 'Impact ↓'], ['quick', 'Quick wins']] },
+    ],
+  });
+  const f = fget('ideas');
+  const status = chip('ideas', 'status', 'new'), cat = chip('ideas', 'cat', 'all'), sort = chip('ideas', 'sort', 'recent');
+  const E = { S: 1, M: 2, L: 3 };
+  const list = all.filter((i) => (status === 'all' || i.status === status) && (cat === 'all' || i.category === cat) && textMatch(f.q, i.title, i.pitch, i.why))
+    .sort((a, b) => sort === 'impact' ? b.impact - a.impact : sort === 'quick' ? (b.impact / E[b.effort]) - (a.impact / E[a.effort]) : b.id - a.id);
+  const d = new Date(); const localDay = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const today = all.filter((i) => i.day === localDay);
+  $('#r-ideas').innerHTML = `
+    <div class="hero ideas-hero"><div><small class="muted">💡 Coin innovation</small>
+      <h2>${pending ? 'Claude fouille le repo, la CI et les news…' : today.length ? `${today.length} idées fraîches aujourd'hui` : 'Les idées du jour arrivent à 9h30'}</h2>
+      <p>Chaque jour de semaine à 9h30 : des idées concrètes pour l'app, la dev XP, la CI, la qualité, la perf — ancrées dans ton code et l'actualité Expo / RN / GitHub. ${run?.done && !run.error ? `Dernière fournée : ${run.count} idées · $${(run.cost ?? 0).toFixed(2)}` : run?.error ? `<span style="color:var(--rose)">Dernière fournée en échec : ${esc(run.error)}</span>` : ''}</p></div>
+      <span class="spacer"></span>
+      <button class="primary" id="ideasGen" ${pending ? 'disabled' : ''}>${pending ? '<span class="dot live"></span> en cours…' : '💡 Nouvelles idées maintenant'}</button></div>
+    ${list.length ? `<div class="ideas">${list.map((i) => ideaCard(i, cats)).join('')}</div>` : `<div class="panel"><div class="empty">${all.length ? 'Aucune idée ne correspond.' : pending ? 'Première fournée en cours (2 à 5 min)…' : 'Pas encore d’idées — clique « Nouvelles idées maintenant ».'}</div></div>`}`;
+}
+RENDER.ideas = renderIdeas;
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  try {
+    if (b.id === 'ideasGen') { await post('/api/ideas'); return toast('Claude cherche des idées (2 à 5 min)'); }
+    if (b.dataset.idea) return await post(`/api/ideas/${b.dataset.idea}/status`, { status: b.dataset.ist });
+    if (b.dataset.ideaDig) return openChore({ kind: 'idea', idea: b.dataset.ideaDig });
+  } catch (err) { toast(err.message); }
+});
+
 // ---- session drawer --------------------------------------------------------------
 let openSession = null;
 let convoTimer = null;
@@ -1371,7 +1431,7 @@ function renderChrome() {
 // ---- per-page refresh ---------------------------------------------------------------
 // Which sources each page shows (mirrors SCOPES on the server) and how old each one is.
 const PAGE_SOURCES = {
-  standup: ['github', 'jira'], atelier: ['github'], fleet: [], home: ['github', 'jira', 'slack'], tasks: ['github', 'jira'], jira: ['jira'], epics: ['jira'], reviews: ['github'], radar: ['github'],
+  standup: ['github', 'jira'], ideas: [], atelier: ['github'], fleet: [], home: ['github', 'jira', 'slack'], tasks: ['github', 'jira'], jira: ['jira'], epics: ['jira'], reviews: ['github'], radar: ['github'],
   brutal: ['github'], slack: ['slack'], sessions: [], usage: ['usage'], stack: [], data: ['usage'],
 };
 const SOURCE_LABEL = { github: 'GitHub', jira: 'Jira', slack: 'Slack', usage: 'Transcripts' };
@@ -1412,6 +1472,7 @@ setInterval(renderFresh, 15_000);
 // A page is skipped when none of the state sections it reads changed.
 const PAGE_FN = {
   standup: [() => renderStandup(), ['standups']],
+  ideas: [() => renderIdeas(), ['ideas']],
   atelier: [() => renderAtelier(), ['graph', 'sessions', 'tasks', 'reviews', 'epics']],
   fleet: [() => renderFleet(), ['fleet']],
   home: [() => renderHome(), ['sessions', 'tasks', 'reviews', 'reviewHistory', 'slack']],
@@ -1430,6 +1491,7 @@ function renderCounts() {
   n('#c-brutal', (S.reviewHistory ?? []).filter((r) => new Date(r.started_at) >= startOfDay()).length);
   n('#c-slack', (S.slack?.items ?? []).filter((i) => i.status === 'new' && i.priority !== 'fyi').length);
   n('#c-sessions', S.sessions.filter((x) => ACTIVE.includes(x.state)).length);
+  n('#c-ideas', (S.ideas?.ideas ?? []).filter((x) => x.status === 'new').length);
   n('#c-fleet', (S.fleet?.sessions ?? []).filter((x) => x.status === 'working' || x.status === 'input').length);
   n('#c-home', actionItems().filter((i) => i.w <= 1).length);
   const live = S.sessions.filter((x) => x.chore === 'auto-review' && ACTIVE.includes(x.state));
@@ -1457,6 +1519,7 @@ async function openChore(params) {
   $('#mTitle').textContent = d.label;
   $('#mSub').textContent = params.kind === 'here' ? `Dans le worktree ${params.cwd}${params.task ? ` · ${params.task}` : ''} — sur sa branche actuelle`
     : params.kind === 'review' ? `PR #${params.pr}`
+    : params.kind === 'idea' ? `Idée #${params.idea} — nouveau worktree sur master, étude d’abord, code après ton go`
     : params.kind === 'epic' ? `Epic ${params.epic} — worktree détaché sur master, lecture seule jusqu’à ton go`
     : params.kind === 'batch' ? `${params.tasks.split(',').length} tickets : ${params.tasks.replaceAll(',', ', ')} — un worktree, une branche par ticket`
     : params.task ?? 'Session libre dans un nouveau worktree sur master';
@@ -1531,7 +1594,7 @@ let gPressed = 0;
 document.addEventListener('keydown', (e) => {
   if (e.target.matches('input, textarea, select') || e.metaKey || e.ctrlKey) return;
   if (e.key === 'g') { gPressed = Date.now(); return; }
-  const map = { f: 'fleet', w: 'atelier', h: 'home', t: 'tasks', j: 'jira', e: 'epics', r: 'reviews', a: 'radar', b: 'brutal', k: 'slack', s: 'sessions', u: 'usage', l: 'stack', d: 'data' };
+  const map = { i: 'ideas', f: 'fleet', w: 'atelier', h: 'home', t: 'tasks', j: 'jira', e: 'epics', r: 'reviews', a: 'radar', b: 'brutal', k: 'slack', s: 'sessions', u: 'usage', l: 'stack', d: 'data' };
   if (Date.now() - gPressed < 800 && map[e.key]) { location.hash = map[e.key]; gPressed = 0; }
 });
 

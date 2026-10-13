@@ -7,13 +7,14 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AUTO_REVIEW_CHORE, BATCH, CHORES, CUSTOM, EFFORTS, EPIC_PLAN, MODELS, REVIEW_CHORE, STANDUP, choreByKey, nextChore } from './chores.mjs';
+import { AUTO_REVIEW_CHORE, BATCH, CHORES, CUSTOM, EFFORTS, EPIC_PLAN, IDEA, MODELS, REVIEW_CHORE, STANDUP, choreByKey, nextChore } from './chores.mjs';
 import { config, repoBySlug, sizeOf } from './config.mjs';
 import { bump, db, kv, logEvent, update, version } from './db.mjs';
 import { autoReviewState, runAutoReview } from './autoreview.mjs';
 import { syncGithub } from './github.mjs';
 import { setSlackStatus, slackItems, syncSlack } from './slack.mjs';
 import { generateStandup, listStandups, standupTick } from './standup.mjs';
+import { generateIdeas, ideaById, ideasState, ideasTick, setIdeaStatus } from './ideas.mjs';
 import { graphOps, graphState, isWorktree, scanWorktrees } from './graph.mjs';
 import { fleetFile, fleetRow, fleetState, fleetTimeline, scanFleet } from './fleet.mjs';
 import { scanUsage, usageStats } from './usage.mjs';
@@ -105,7 +106,7 @@ function buildEpics(all = listSessions()) {
 }
 
 // Static-ish bits, computed once.
-const CHORE_LIST = [...CHORES, CUSTOM, REVIEW_CHORE, AUTO_REVIEW_CHORE, BATCH, EPIC_PLAN, STANDUP].map(({ key, label, model, effort }) => ({ key, label, model, effort }));
+const CHORE_LIST = [...CHORES, CUSTOM, REVIEW_CHORE, AUTO_REVIEW_CHORE, BATCH, EPIC_PLAN, STANDUP, IDEA].map(({ key, label, model, effort }) => ({ key, label, model, effort }));
 
 // Each section is rebuilt only when one of the tables it reads has changed (db.version):
 // a session ticking its token count no longer recomputes Jira, epics or the review history.
@@ -139,6 +140,7 @@ async function state() {
     slack: cached('slack', ['slack', 'kv:slack'], () => ({ ...(kv.get('slack') ?? {}), enabled: config.slack.enabled, model: config.slack.model, items: slackItems() })),
     db: cached('db', TABLES, () => ({ path: join(config.dataDir, 'ai-dashboard.db'), tables: Object.fromEntries(TABLES.map((t) => [t, db.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n])) })),
     standups: cached('standups', ['standups'], listStandups),
+    ideas: cached('ideas', ['ideas'], ideasState),
     graph: cached('graph', ['graph', 'worktrees'], graphState),
     fleet: cached('fleet', ['fleetLive'], () => fleetSnap),
     chores: CHORE_LIST,
@@ -246,6 +248,7 @@ const usageTick = () => scanUsage().then((n) => { kv.set('usageScannedAt', new D
 setInterval(usageTick, 60_000);
 usageTick();
 setInterval(() => standupTick()?.finally(pushState), 60_000);
+setInterval(() => ideasTick()?.finally(pushState), 60_000);
 // Fleet: fold new transcript bytes + live status every 5 s; push only when the picture changed.
 let fleetSnap = null, fleetJson = '';
 let fleetBusy = false;
@@ -289,6 +292,11 @@ function choreDefaults(body) {
     const chore = body.chore === 'auto-review' ? AUTO_REVIEW_CHORE : REVIEW_CHORE;
     return { chore, pr, prompt: chore.prompt(pr) };
   }
+  if (body.kind === 'idea') {
+    const idea = ideaById(Number(body.idea));
+    if (!idea) throw httpError(404, 'idea not found');
+    return { chore: IDEA, idea, prompt: IDEA.prompt(idea) };
+  }
   if (body.kind === 'epic') {
     const key = String(body.epic ?? '').trim().toUpperCase();
     if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) throw httpError(400, 'epic key like MO-1234 expected');
@@ -310,15 +318,15 @@ async function startSession(body) {
   const effort = EFFORTS.includes(body.effort) ? body.effort : d.chore.effort;
   const prompt = (body.prompt ?? d.prompt).trim();
   const repo = repoBySlug(d.pr?.repo ?? d.task?.pr?.repo ?? config.repos[0].slug);
-  const cwd = d.here ? d.here : d.pr ? await reviewWorktree(repo, d.pr) : d.task ? await taskWorktree(repo, d.task) : await scratchWorktree(repo, d.tasks ? 'batch' : d.epic ? `plan-${d.epic.key}` : 'custom');
-  const label = d.here ? `${d.here.split('/').pop()}${d.task ? `-${d.task.key}` : ''}` : d.pr ? `review-${d.pr.number}` : d.task ? d.task.key : d.tasks ? `${d.tasks.length}-tickets` : d.epic ? d.epic.key : 'custom';
+  const cwd = d.here ? d.here : d.pr ? await reviewWorktree(repo, d.pr) : d.task ? await taskWorktree(repo, d.task) : await scratchWorktree(repo, d.tasks ? 'batch' : d.epic ? `plan-${d.epic.key}` : d.idea ? `idea-${d.idea.id}` : 'custom');
+  const label = d.here ? `${d.here.split('/').pop()}${d.task ? `-${d.task.key}` : ''}` : d.pr ? `review-${d.pr.number}` : d.task ? d.task.key : d.tasks ? `${d.tasks.length}-tickets` : d.epic ? d.epic.key : d.idea ? `idea-${d.idea.id}` : 'custom';
   return launch({
     name: `eric-ai-${label}-${d.chore.key}`.slice(0, 60),
     cwd, model, effort, prompt,
     readOnly: !!d.pr,
     allow: d.epic ? PLAN_TOOLS : null,
     row: {
-      title: d.pr?.title ?? d.epic?.summary ?? d.task?.issue?.summary ?? d.task?.pr?.title ?? null,
+      title: d.idea?.title ?? d.pr?.title ?? d.epic?.summary ?? d.task?.issue?.summary ?? d.task?.pr?.title ?? null,
       head_sha: d.pr?.head_sha ?? null, author: d.pr?.author ?? null, epic: d.epic?.key ?? null,
       chore: d.chore.key, task: d.task?.key ?? null, tasks: d.tasks ? JSON.stringify(d.tasks.map((t) => t.key)) : null,
       repo: repo.slug, pr: d.pr?.number ?? d.task?.pr?.number ?? null,
@@ -407,6 +415,9 @@ createServer(async (req, res) => {
         const rows = ro.prepare(q).all().slice(0, 1000);
         return json(res, 200, { rows });
       }
+      if (pathname === '/api/ideas') { generateIdeas({ model: body.model === 'opus' ? 'opus' : 'sonnet' }).finally(pushState); pushState(); return json(res, 202, { ok: true }); }
+      const is = pathname.match(/^\/api\/ideas\/(\d+)\/status$/);
+      if (is) { setIdeaStatus(Number(is[1]), ['new', 'kept', 'dismissed', 'launched', 'done'].includes(body.status) ? body.status : 'new'); pushState(); return json(res, 200, { ok: true }); }
       if (pathname === '/api/standup') { generateStandup({ model: body.model === 'opus' ? 'opus' : 'sonnet' }).finally(pushState); pushState(); return json(res, 202, { ok: true }); }
       const g = pathname.match(/^\/api\/graph\/(pos|resetPos|addNode|editNode|deleteNode|addEdge|deleteEdge)$/);
       if (g) { const id = graphOps[g[1]](body); pushState(); return json(res, 200, { ok: true, id }); }
@@ -460,7 +471,12 @@ createServer(async (req, res) => {
       }
       if (pathname === '/api/refresh') return json(res, 200, { results: await refresh(String(body.scope ?? '')) });
       if (pathname === '/api/sync') { resetJiraToken(); await sync({ force: true }); return json(res, 200, { ok: true }); }
-      if (pathname === '/api/sessions') { const id = await startSession(body); pushState(); return json(res, 200, { id }); }
+      if (pathname === '/api/sessions') {
+        const id = await startSession(body);
+        if (body.kind === 'idea') setIdeaStatus(Number(body.idea), 'launched');
+        pushState();
+        return json(res, 200, { id });
+      }
       const reply = pathname.match(/^\/api\/sessions\/([0-9a-f]+)\/reply$/);
       if (reply) {
         const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(reply[1]);

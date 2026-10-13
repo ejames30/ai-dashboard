@@ -73,6 +73,9 @@ export const config = {
   // Fleet: every Claude Code session on this Mac touched in the last `days`.
   fleet: { days: 3 },
 
+  // Innovation corner: fresh ideas every weekday from this time (after the stand-up).
+  ideas: { at: [9, 30] },
+
   // Stand-up written automatically on weekdays at this hour, for the previous working day.
   standup: { hour: 9 },
 
