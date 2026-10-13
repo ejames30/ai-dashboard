@@ -102,6 +102,26 @@ export const AUTO_REVIEW_CHORE = {
   ),
 };
 
+// Planning an epic: read everything, explore the code, propose a PR-sized breakdown, wait.
+export const EPIC_PLAN = {
+  key: 'epic-plan',
+  label: "Plan d'epic",
+  model: 'opus',
+  effort: 'high',
+  prompt: (epic) => `${PREAMBLE}
+
+Plan the Jira epic ${epic.key} — "${epic.summary ?? ''}" (${epic.url}).
+1. Read the epic and EVERY child issue (Atlassian: searchJiraIssuesUsingJql \`parent = ${epic.key}\`), with their descriptions, comments and linked Confluence pages / Figma links.
+2. Explore this repo (detached on origin/master) to see what already exists and what each piece touches. Follow AGENTS.md conventions (features/ layering, flags, i18n, tests, OTA vs native).
+3. Reply with the plan in Markdown, as your final message:
+   - **Goal** — one paragraph, user-visible outcome
+   - **Current state** — what exists in code today (with file paths)
+   - **Approach** — architecture, data flow, feature flag, risks (OTA/native fingerprint, BE dependencies)
+   - **Breakdown** — a table of PR-sized steps in order: # · title · existing ticket key or NEW · scope/files · depends on · size S/M/L · risk
+   - **Open questions** — for product/design/backend, each with who to ask
+Don't change any file and don't create or edit Jira tickets. Then wait: I'll comment on the plan. Only after my explicit go do you create the missing tickets (under ${epic.key}) or start the first step.`,
+};
+
 // Several tickets in ONE session: cheaper context than N sessions when they touch the same area.
 export const BATCH = {
   key: 'batch',
@@ -120,7 +140,7 @@ Start by reading every ticket (Atlassian MCP), tell me how you'd group or order 
 /** The chore to suggest for a task, or null. */
 export const nextChore = (task) => CHORES.find((c) => c.when(task)) ?? null;
 
-export const choreByKey = (key) => [...CHORES, CUSTOM, REVIEW_CHORE, AUTO_REVIEW_CHORE, BATCH].find((c) => c.key === key);
+export const choreByKey = (key) => [...CHORES, CUSTOM, REVIEW_CHORE, AUTO_REVIEW_CHORE, BATCH, EPIC_PLAN].find((c) => c.key === key);
 
 export const MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];

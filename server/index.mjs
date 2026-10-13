@@ -7,13 +7,13 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AUTO_REVIEW_CHORE, BATCH, CHORES, CUSTOM, EFFORTS, MODELS, REVIEW_CHORE, choreByKey, nextChore } from './chores.mjs';
+import { AUTO_REVIEW_CHORE, BATCH, CHORES, CUSTOM, EFFORTS, EPIC_PLAN, MODELS, REVIEW_CHORE, choreByKey, nextChore } from './chores.mjs';
 import { config, repoBySlug, sizeOf } from './config.mjs';
-import { db, kv } from './db.mjs';
+import { db, kv, update } from './db.mjs';
 import { autoReviewState, runAutoReview } from './autoreview.mjs';
 import { syncGithub } from './github.mjs';
 import { jiraSource, resetJiraToken, syncJira } from './jira.mjs';
-import { launch, listSessions, openInTerminal, pollSessions, postDraftReview, replySession, stopSession, transcript } from './sessions.mjs';
+import { PLAN_TOOLS, launch, listSessions, openInTerminal, pollSessions, postDraftReview, replySession, reviewFromTranscript, stopSession, transcript } from './sessions.mjs';
 import { onStackLog, refreshStack, stackStatus, startStack, stopStack, switchStack } from './stack.mjs';
 import { reviewWorktree, scratchWorktree, taskWorktree } from './worktrees.mjs';
 
@@ -48,14 +48,51 @@ function buildTasks() {
   }).sort((a, b) => (b.pr?.updated ?? b.issue?.updated ?? '').localeCompare(a.pr?.updated ?? a.issue?.updated ?? ''));
 }
 
+const REVIEW_KINDS = ['ai-review', 'auto-review', 'self-review'];
+const parseReview = (s) => { try { return s.review_json ? JSON.parse(s.review_json) : null; } catch { return null; } };
+
+/** Every review session, newest first, with its verdict counts: the Brutal reviews page. */
+function buildReviewHistory() {
+  const prs = db.prepare('SELECT * FROM prs').all();
+  return listSessions().filter((s) => REVIEW_KINDS.includes(s.chore)).map((s) => {
+    const r = parseReview(s);
+    const count = (sev) => (r?.comments ?? []).filter((c) => c.severity === sev).length;
+    const pr = prs.find((p) => p.repo === s.repo && p.number === s.pr) ?? null;
+    return {
+      id: s.id, chore: s.chore, state: s.state, pr: s.pr, repo: s.repo, title: s.title ?? pr?.title ?? null,
+      author: s.author ?? pr?.author ?? null, url: pr?.url ?? (s.pr ? `https://github.com/${s.repo}/pull/${s.pr}` : null),
+      open: !!pr, outdated: !!(pr && s.head_sha && pr.head_sha !== s.head_sha),
+      started_at: s.started_at, ended_at: s.ended_at, cost_usd: s.cost_usd, model: s.model, posted_url: s.posted_url, error: s.error,
+      summary: r?.summary ?? null, comments: r?.comments ?? [],
+      counts: { critical: count('critical'), warning: count('warning'), suggestion: count('suggestion') },
+    };
+  });
+}
+
 function buildReviews() {
-  const sessions = listSessions().filter((s) => ['ai-review', 'auto-review'].includes(s.chore));
-  return db.prepare("SELECT * FROM prs WHERE kind = 'review'").all().map((pr) => ({
-    ...pr,
-    lines: pr.additions + pr.deletions,
-    size: sizeOf(pr.additions + pr.deletions),
-    session: sessions.find((s) => s.repo === pr.repo && s.pr === pr.number) ?? null,
-  })).sort((a, b) => a.lines - b.lines);
+  const sessions = listSessions().filter((s) => REVIEW_KINDS.includes(s.chore));
+  return db.prepare("SELECT * FROM prs WHERE kind = 'review'").all().map((pr) => {
+    const session = sessions.find((s) => s.repo === pr.repo && s.pr === pr.number) ?? null;
+    return {
+      ...pr,
+      lines: pr.additions + pr.deletions,
+      size: sizeOf(pr.additions + pr.deletions),
+      session,
+      outdated: !!(session?.head_sha && session.head_sha !== pr.head_sha),
+      auto: config.autoReview.authors.includes(pr.author),
+    };
+  }).sort((a, b) => a.lines - b.lines);
+}
+
+/** Epics: open ones + my tickets' parents, each with my tickets under it and its plan sessions. */
+function buildEpics() {
+  const issues = db.prepare('SELECT * FROM issues').all();
+  const sessions = listSessions().filter((s) => s.epic);
+  return db.prepare('SELECT * FROM epics').all().map((e) => ({
+    ...e,
+    mine: issues.filter((i) => i.parent_key === e.key).map((i) => ({ key: i.key, summary: i.summary, status: i.status, status_category: i.status_category })),
+    plans: sessions.filter((s) => s.epic === e.key).map((s) => ({ id: s.id, state: s.state, started_at: s.started_at, cost_usd: s.cost_usd })),
+  })).sort((a, b) => b.mine.length - a.mine.length || (b.updated ?? '').localeCompare(a.updated ?? ''));
 }
 
 async function state() {
@@ -63,12 +100,14 @@ async function state() {
     me: config.me,
     tasks: buildTasks(),
     reviews: buildReviews(),
+    reviewHistory: buildReviewHistory(),
+    epics: buildEpics(),
     sessions: listSessions(),
     stack: await stackStatus(),
     sync: kv.get('sync') ?? null,
     jira: { ...(kv.get('jira') ?? {}), source: await jiraSource(), site: config.jira.site, service: config.jira.keychainService, email: config.email },
     autoReview: autoReviewState(),
-    chores: [...CHORES, CUSTOM, REVIEW_CHORE, AUTO_REVIEW_CHORE, BATCH].map(({ key, label, model, effort }) => ({ key, label, model, effort })),
+    chores: [...CHORES, CUSTOM, REVIEW_CHORE, AUTO_REVIEW_CHORE, BATCH, EPIC_PLAN].map(({ key, label, model, effort }) => ({ key, label, model, effort })),
     models: MODELS,
     efforts: EFFORTS,
   };
@@ -106,6 +145,11 @@ async function onReviewDone(session) {
   return postDraftReview(session, pr);
 }
 
+// Reviews posted before review_json existed: parse them once from their transcript.
+for (const s of db.prepare(`SELECT * FROM sessions WHERE chore IN ('ai-review','auto-review') AND review_json IS NULL AND session_id IS NOT NULL`).all()) {
+  try { const r = reviewFromTranscript(s); if (r) update('sessions', { id: s.id }, { review_json: JSON.stringify(r) }); } catch {}
+}
+
 setInterval(sync, config.syncEveryMs);
 setInterval(() => pollSessions(onReviewDone).then((c) => c && pushState()).catch((e) => console.error('poll', e.message)), config.sessionPollMs);
 setInterval(pushState, 15_000); // stack status, relative times
@@ -128,7 +172,14 @@ function choreDefaults(body) {
   if (body.kind === 'review') {
     const pr = db.prepare("SELECT * FROM prs WHERE kind = 'review' AND repo = ? AND number = ?").get(body.repo, Number(body.pr));
     if (!pr) throw httpError(404, 'PR not found');
-    return { chore: REVIEW_CHORE, pr, prompt: REVIEW_CHORE.prompt(pr) };
+    const chore = body.chore === 'auto-review' ? AUTO_REVIEW_CHORE : REVIEW_CHORE;
+    return { chore, pr, prompt: chore.prompt(pr) };
+  }
+  if (body.kind === 'epic') {
+    const key = String(body.epic ?? '').trim().toUpperCase();
+    if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) throw httpError(400, 'epic key like MO-1234 expected');
+    const epic = db.prepare('SELECT * FROM epics WHERE key = ?').get(key) ?? { key, summary: '', url: `${config.jira.site}/browse/${key}` };
+    return { chore: EPIC_PLAN, epic, prompt: EPIC_PLAN.prompt(epic) };
   }
   const task = body.task ? findTask(body.task) : null;
   const chore = choreByKey(body.chore) ?? CUSTOM;
@@ -141,13 +192,16 @@ async function startSession(body) {
   const effort = EFFORTS.includes(body.effort) ? body.effort : d.chore.effort;
   const prompt = (body.prompt ?? d.prompt).trim();
   const repo = repoBySlug(d.pr?.repo ?? d.task?.pr?.repo ?? config.repos[0].slug);
-  const cwd = d.pr ? await reviewWorktree(repo, d.pr) : d.task ? await taskWorktree(repo, d.task) : await scratchWorktree(repo, d.tasks ? 'batch' : 'custom');
-  const label = d.pr ? `review-${d.pr.number}` : d.task ? d.task.key : d.tasks ? `${d.tasks.length}-tickets` : 'custom';
+  const cwd = d.pr ? await reviewWorktree(repo, d.pr) : d.task ? await taskWorktree(repo, d.task) : await scratchWorktree(repo, d.tasks ? 'batch' : d.epic ? `plan-${d.epic.key}` : 'custom');
+  const label = d.pr ? `review-${d.pr.number}` : d.task ? d.task.key : d.tasks ? `${d.tasks.length}-tickets` : d.epic ? d.epic.key : 'custom';
   return launch({
     name: `eric-ai-${label}-${d.chore.key}`.slice(0, 60),
     cwd, model, effort, prompt,
     readOnly: !!d.pr,
+    allow: d.epic ? PLAN_TOOLS : null,
     row: {
+      title: d.pr?.title ?? d.epic?.summary ?? d.task?.issue?.summary ?? d.task?.pr?.title ?? null,
+      head_sha: d.pr?.head_sha ?? null, author: d.pr?.author ?? null, epic: d.epic?.key ?? null,
       chore: d.chore.key, task: d.task?.key ?? null, tasks: d.tasks ? JSON.stringify(d.tasks.map((t) => t.key)) : null,
       repo: repo.slug, pr: d.pr?.number ?? d.task?.pr?.number ?? null,
     },
@@ -161,7 +215,7 @@ async function startAutoReview(pr) {
     name: `eric-ai-review-${pr.number}-auto-review`,
     cwd: await reviewWorktree(repo, pr), model: c.model, effort: c.effort, prompt: c.prompt(pr),
     readOnly: true,
-    row: { chore: c.key, task: null, tasks: null, repo: repo.slug, pr: pr.number },
+    row: { chore: c.key, task: null, tasks: null, repo: repo.slug, pr: pr.number, title: pr.title, head_sha: pr.head_sha, author: pr.author },
   });
 }
 

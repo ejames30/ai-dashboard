@@ -4,43 +4,55 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Eric's AI Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="/style.css">
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 </head>
 <body>
-<header>
-  <h1>Eric's AI Dashboard</h1>
-  <nav id="tabs">
-    <button data-tab="tasks" class="on">Tâches <span class="count" id="cTasks"></span></button>
-    <button data-tab="jira">Jira <span class="count" id="cJira"></span></button>
-    <button data-tab="reviews">Reviews <span class="count" id="cReviews"></span></button>
-    <button data-tab="sessions">Sessions <span class="count" id="cSessions"></span></button>
-    <button data-tab="stack">Stack <span class="dot" id="stackDot"></span></button>
-  </nav>
-  <span class="spacer"></span>
-  <span class="pill-cost" id="costToday" title="Estimation au prix API des sessions lancées aujourd'hui"></span>
-  <span class="muted small" id="syncInfo"></span>
-  <button id="syncBtn">Sync</button>
-  <button class="primary" id="customBtn">+ Prompt libre</button>
-</header>
-
-<div id="banner"></div>
-
-<main>
-  <section id="tab-tasks" class="tab on"></section>
-  <section id="tab-jira" class="tab">
-    <div class="toolbar">
-      <input id="jSearch" type="search" placeholder="Rechercher un ticket (clé ou titre)…">
-      <select id="jProject"></select>
-      <div class="chips" id="jCats"></div>
-      <span class="spacer"></span>
-      <span class="muted small" id="jInfo"></span>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><span class="logo">E</span><div><b>Eric's AI</b><small>Dashboard</small></div></div>
+    <nav id="nav">
+      <a data-page="home"><i>◎</i>Aujourd'hui <span class="count hot" id="c-home"></span></a>
+      <div class="navlabel">Mon travail</div>
+      <a data-page="tasks"><i>▤</i>Tâches <span class="count" id="c-tasks"></span></a>
+      <a data-page="jira"><i>◆</i>Jira <span class="count" id="c-jira"></span></a>
+      <a data-page="epics"><i>✦</i>Epics &amp; plans <span class="count" id="c-epics"></span></a>
+      <div class="navlabel">Équipe</div>
+      <a data-page="reviews"><i>⇄</i>PR à relire <span class="count" id="c-reviews"></span></a>
+      <a data-page="brutal"><i>⚡</i>Brutal reviews <span class="count" id="c-brutal"></span></a>
+      <div class="navlabel">Machine</div>
+      <a data-page="sessions"><i>▶</i>Sessions <span class="count" id="c-sessions"></span></a>
+      <a data-page="stack"><i>⬢</i>Stack local <span class="dot" id="stackDot"></span></a>
+    </nav>
+    <div class="side-foot">
+      <div class="costbox"><small>Coût est. aujourd'hui</small><b id="costToday">–</b></div>
+      <div class="muted small" id="syncInfo"></div>
+      <div class="side-actions"><button id="syncBtn">⟳ Sync</button><button id="themeBtn" title="Clair / sombre">◐</button></div>
     </div>
-    <div id="jList"></div>
-  </section>
-  <section id="tab-reviews" class="tab"></section>
-  <section id="tab-sessions" class="tab"></section>
-  <section id="tab-stack" class="tab"></section>
-</main>
+  </aside>
+
+  <div class="main">
+    <header class="top">
+      <div><h1 id="pageTitle"></h1><div class="muted small" id="pageSub"></div></div>
+      <span class="spacer"></span>
+      <button class="primary" id="customBtn">＋ Prompt libre</button>
+    </header>
+    <div id="banner"></div>
+    <main>
+      <section class="page" id="page-home"></section>
+      <section class="page" id="page-tasks"><div class="filters" id="f-tasks"></div><div id="r-tasks"></div></section>
+      <section class="page" id="page-jira"><div class="filters" id="f-jira"></div><div id="r-jira"></div></section>
+      <section class="page" id="page-epics"><div class="filters" id="f-epics"></div><div id="r-epics"></div></section>
+      <section class="page" id="page-reviews"><div class="filters" id="f-reviews"></div><div id="r-reviews"></div></section>
+      <section class="page" id="page-brutal"><div class="filters" id="f-brutal"></div><div id="r-brutal"></div></section>
+      <section class="page" id="page-sessions"><div class="filters" id="f-sessions"></div><div id="r-sessions"></div></section>
+      <section class="page" id="page-stack"></section>
+    </main>
+  </div>
+</div>
 
 <dialog id="modal">
   <form method="dialog" id="choreForm">
@@ -54,7 +66,7 @@
     <p class="muted small" id="mNote"></p>
     <div class="actions">
       <button value="cancel" formnovalidate>Annuler</button>
-      <button class="primary" id="mStart" value="start">Start session</button>
+      <button class="primary" id="mStart" value="start">Lancer la session</button>
     </div>
   </form>
 </dialog>
@@ -62,7 +74,7 @@
 <dialog id="sessionModal" class="drawer">
   <div class="drawer-head">
     <div><h2 id="sTitle"></h2><div class="muted small" id="sMeta"></div></div>
-    <div class="row-actions"><span id="sLinks"></span><button id="sClose">Fermer</button></div>
+    <div class="row-actions"><span id="sLinks"></span><button class="ghost" id="sClose" aria-label="Fermer">✕</button></div>
   </div>
   <div class="convo" id="sConvo"></div>
   <form id="sReply" class="reply">

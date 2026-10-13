@@ -20,9 +20,17 @@ const REVIEW_TOOLS = [
   'Bash(gh pr view:*)', 'Bash(gh pr diff:*)',
 ];
 
-export async function launch({ name, cwd, model, effort, prompt, readOnly, row }) {
+// Epic plans read Jira/Confluence and the code without asking; anything else still prompts.
+export const PLAN_TOOLS = [
+  ...REVIEW_TOOLS, 'Bash(git grep:*)', 'Bash(ls:*)',
+  ...['getAccessibleAtlassianResources', 'searchJiraIssuesUsingJql', 'getJiraIssue', 'getJiraIssueRemoteIssueLinks', 'search', 'fetch',
+    'getConfluencePage', 'searchConfluenceUsingCql', 'getConfluencePageDescendants'].map((t) => `mcp__claude_ai_Atlassian__${t}`),
+];
+
+export async function launch({ name, cwd, model, effort, prompt, readOnly, allow, row }) {
   const args = ['--bg', '-n', name, '--remote-control', name, '--model', model, '--effort', effort, '--settings', SESSION_SETTINGS];
   if (readOnly) args.push('--permission-mode', 'dontAsk', '--allowedTools', ...REVIEW_TOOLS);
+  else if (allow?.length) args.push('--allowedTools', ...allow);
   args.push('--', prompt);
   const out = await sh('claude', args, { cwd, timeout: 60_000 });
   const id = out.match(/backgrounded · ([0-9a-f]+)/)?.[1];
@@ -187,7 +195,7 @@ const SEVERITY = { critical: '🚨 **Critical**', warning: '⚠️ **Warning**',
 
 /** Turn the review session's JSON into a PENDING review: visible only to me until I submit it. */
 /** The last ```json block of the session's final assistant messages. */
-function reviewFromTranscript(session) {
+export function reviewFromTranscript(session) {
   const path = transcriptPath(session.cwd, session.session_id);
   if (!existsSync(path)) return null;
   const texts = readFileSync(path, 'utf8').split('\n').flatMap((line) => {
@@ -212,6 +220,7 @@ export async function postDraftReview(session, pr) {
   let review;
   try { review = reviewFromTranscript(session); } catch (e) { return { error: `invalid review JSON: ${e.message}` }; }
   if (!review) return { error: 'no ```json review in the final message' };
+  const review_json = JSON.stringify(review);
   const comments = (review.comments ?? []).filter((c) => c.path && Number.isInteger(c.line)).map((c) => ({
     path: c.path, line: c.line, side: 'RIGHT', body: `${SEVERITY[c.severity] ?? ''}\n\n${c.body}`.trim(),
   }));
@@ -229,11 +238,11 @@ export async function postDraftReview(session, pr) {
     try { await post({ commit_id: pr.head_sha, body, ...event }); }
     catch (e2) {
       // A pending review of mine blocks a second review: a plain PR comment still gets through.
-      if (!publish) return { error: e2.message.slice(0, 300) };
+      if (!publish) return { error: e2.message.slice(0, 300), review_json };
       try { await gh(['pr', 'comment', String(pr.number), '-R', session.repo, '--body-file', '-'], { input: body }); }
-      catch (e3) { return { error: e3.message.slice(0, 300) }; }
-      return { posted_url: pr.url, error: null };
+      catch (e3) { return { error: e3.message.slice(0, 300), review_json }; }
+      return { posted_url: pr.url, error: null, review_json };
     }
   }
-  return { posted_url: `${pr.url}/files`, error: null };
+  return { posted_url: `${pr.url}/files`, error: null, review_json };
 }

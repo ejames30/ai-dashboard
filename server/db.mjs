@@ -35,6 +35,11 @@ db.exec(`
     turns INTEGER DEFAULT 0, error TEXT, posted_url TEXT
   );
 
+  -- Open epics I can plan on: those of config.jira.epicProjects + parents of my tickets.
+  CREATE TABLE IF NOT EXISTS epics (
+    key TEXT PRIMARY KEY, summary TEXT, status TEXT, status_category TEXT, url TEXT, updated TEXT, synced_at TEXT
+  );
+
   CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 `);
 
@@ -42,6 +47,13 @@ db.exec(`
 for (const sql of [
   'ALTER TABLE sessions ADD COLUMN cost_usd REAL DEFAULT 0',
   'ALTER TABLE sessions ADD COLUMN tasks TEXT', // JSON array of ticket keys for a multi-ticket session
+  'ALTER TABLE sessions ADD COLUMN title TEXT', // what the session is about (PR title, epic summary)
+  'ALTER TABLE sessions ADD COLUMN head_sha TEXT', // reviews: the commit that was reviewed
+  'ALTER TABLE sessions ADD COLUMN review_json TEXT', // reviews: the parsed {summary, comments}
+  'ALTER TABLE sessions ADD COLUMN epic TEXT', // epic plans: the epic key
+  'ALTER TABLE sessions ADD COLUMN author TEXT', // reviews: PR author
+  'ALTER TABLE issues ADD COLUMN parent_key TEXT',
+  'ALTER TABLE issues ADD COLUMN parent_summary TEXT',
 ]) {
   try { db.exec(sql); } catch {}
 }

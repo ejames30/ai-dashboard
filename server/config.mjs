@@ -35,8 +35,10 @@ export const config = {
     //   security add-generic-password -s ai-dashboard-jira -a eric@hivebrite.com -w <token>
     keychainService: 'ai-dashboard-jira',
     jql: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC',
+    // Epics offered on the Epics page (on top of my tickets' parents).
+    epicJql: 'issuetype = Epic AND project in (MO, MOB) AND statusCategory != Done ORDER BY updated DESC',
     // Without a token, issues come through a headless Claude + the Atlassian connector: slower and not free, so less often.
-    mcpEveryMs: 2 * 3600_000, // one connector sync ≈ $0.25 for ~190 issues
+    mcpEveryMs: 30 * 60_000, // ~3 headless Haiku runs ≈ $0.02 per sync; a token makes it free and instant
   },
 
   // New ready PRs from these teammates get a brutal review POSTED automatically (see autoreview.mjs).
