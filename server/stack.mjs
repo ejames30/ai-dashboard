@@ -61,7 +61,7 @@ export async function switchStack({ branch, pr }) {
   try {
     await ensureCheckout(r);
     const before = lockHash(r.stack.path);
-    const ref = pr ? `refs/goblin/stack-pr-${pr}` : `origin/${branch}`;
+    const ref = pr ? `refs/ai-dashboard/stack-pr-${pr}` : `origin/${branch}`;
     await git(r.path, ['fetch', '--quiet', '--force', 'origin', pr ? `pull/${pr}/head:${ref}` : branch]);
     await git(r.stack.path, ['checkout', '--quiet', '--detach', '--force', ref]);
     const sha = (await git(r.stack.path, ['rev-parse', '--short', 'HEAD'])).trim();

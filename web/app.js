@@ -16,7 +16,7 @@ const kfmt = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.
 const toast = (msg) => { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 3500); };
 
 async function post(path, body = {}) {
-  const res = await fetch(path, { method: 'POST', headers: { 'X-Goblin': '1', 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const res = await fetch(path, { method: 'POST', headers: { 'X-Dashboard': '1', 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error ?? res.statusText);
   return data;
@@ -205,7 +205,7 @@ function renderHeader() {
   const blocked = S.sessions.filter((s) => s.state === 'blocked');
   if (blocked.length) parts.push(`<b>${blocked.length} session(s) attendent ta réponse :</b> ${blocked.map((s) => `${rcLink(s) ? `<a href="${esc(s.rc_url)}" target="_blank">${esc(s.name)}</a>` : esc(s.name)}`).join(', ')}`);
   $('#banner').innerHTML = parts.join('<br>');
-  document.title = blocked.length ? `(${blocked.length}) Goblin` : 'Goblin';
+  document.title = blocked.length ? `(${blocked.length}) Eric's AI Dashboard` : "Eric's AI Dashboard";
 }
 
 function render() {
@@ -226,7 +226,7 @@ async function openChore(params) {
   $('#mEffort').innerHTML = S.efforts.map((e) => `<option ${e === d.effort ? 'selected' : ''}>${e}</option>`).join('');
   $('#mPrompt').value = d.prompt;
   $('#mNote').textContent = params.kind === 'review'
-    ? 'Lecture seule : Claude écrit la review dans un fichier, Goblin en fait un brouillon GitHub que tu relis et soumets toi-même.'
+    ? 'Lecture seule : Claude ne peut ni écrire ni poster. Le dashboard transforme sa review en brouillon GitHub que tu relis et soumets toi-même.'
     : 'Session Claude Code en arrière-plan, Remote Control activé : tu peux la suivre ou lui répondre depuis claude.ai.';
   $('#modal').showModal();
 }

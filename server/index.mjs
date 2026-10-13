@@ -1,4 +1,4 @@
-// Goblin — local cockpit: my tasks + their next action, teammates' PRs to review,
+// Eric's AI Dashboard — local cockpit: my tasks + their next action, teammates' PRs to review,
 // every Claude session I start, and the local stack. 127.0.0.1 only, zero dependencies.
 
 process.removeAllListeners('warning'); // node:sqlite's "experimental" notice
@@ -128,7 +128,7 @@ async function startSession(body) {
   const cwd = d.pr ? await reviewWorktree(repo, d.pr) : d.task ? await taskWorktree(repo, d.task) : await scratchWorktree(repo);
   const label = d.pr ? `review-${d.pr.number}` : d.task ? d.task.key : 'custom';
   return launch({
-    name: `goblin-${label}-${d.chore.key}`.slice(0, 60),
+    name: `eric-ai-${label}-${d.chore.key}`.slice(0, 60),
     cwd, model, effort, prompt,
     readOnly: !!d.pr,
     row: { chore: d.chore.key, task: d.task?.key ?? null, repo: repo.slug, pr: d.pr?.number ?? d.task?.pr?.number ?? null },
@@ -174,7 +174,7 @@ createServer(async (req, res) => {
     }
     if (req.method === 'POST') {
       // Custom header → a cross-site page can't send it without a CORS preflight we never answer.
-      if (req.headers['x-goblin'] !== '1') return json(res, 403, { error: 'missing X-Goblin header' });
+      if (req.headers['x-dashboard'] !== '1') return json(res, 403, { error: 'missing X-Dashboard header' });
       const body = await readBody(req);
       if (pathname === '/api/sync') { resetJiraToken(); await sync(); return json(res, 200, { ok: true }); }
       if (pathname === '/api/sessions') { const id = await startSession(body); pushState(); return json(res, 200, { id }); }
@@ -192,4 +192,4 @@ createServer(async (req, res) => {
     console.error(e);
     json(res, e.code && Number.isInteger(e.code) ? e.code : 500, { error: e.message });
   }
-}).listen(config.port, '127.0.0.1', () => console.log(`goblin → http://localhost:${config.port}`));
+}).listen(config.port, '127.0.0.1', () => console.log(`Eric's AI Dashboard → http://localhost:${config.port}`));

@@ -7,7 +7,7 @@ export const config = {
   port: Number(process.env.PORT ?? 4317),
   me: 'ejames30',
   email: 'eric@hivebrite.com',
-  dataDir: process.env.GOBLIN_DATA ?? join(HOME, '.claude/pr-autoreview'),
+  dataDir: process.env.AI_DASHBOARD_DATA ?? join(HOME, '.claude/pr-autoreview'),
 
   // Every repo the cockpit tracks. `path` is the main clone; task worktrees live in
   // <path>/.claude/worktrees/<name> — inside the repo, so Claude already trusts them
@@ -32,8 +32,8 @@ export const config = {
   jira: {
     site: 'https://hivebrite.atlassian.net',
     // API token from https://id.atlassian.com/manage-profile/security/api-tokens, stored with:
-    //   security add-generic-password -s goblin-jira -a eric@hivebrite.com -w <token>
-    keychainService: 'goblin-jira',
+    //   security add-generic-password -s ai-dashboard-jira -a eric@hivebrite.com -w <token>
+    keychainService: 'ai-dashboard-jira',
     jql: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC',
   },
 

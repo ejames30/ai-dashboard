@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { config } from './config.mjs';
 
 mkdirSync(config.dataDir, { recursive: true });
-export const db = new DatabaseSync(join(config.dataDir, 'goblin.db'));
+export const db = new DatabaseSync(join(config.dataDir, 'ai-dashboard.db'));
 
 db.exec(`
   PRAGMA journal_mode = WAL;

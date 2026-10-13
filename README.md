@@ -1,4 +1,4 @@
-# Goblin
+# Eric's AI Dashboard
 
 Local dev cockpit on `http://localhost:4317` (127.0.0.1 only, zero dependencies, Node 24 + built-in SQLite). Inspired by a teammate's Task Goblin.
 
@@ -22,10 +22,10 @@ A teammate's diff is untrusted. The review session runs in `dontAsk` mode with o
 ## Setup
 
 ```bash
-./install.sh                     # (re)load the launchd agent com.eric.goblin (KeepAlive)
-tail -f ~/Library/Logs/goblin.log
+./install.sh                     # (re)load the launchd agent com.eric.ai-dashboard (KeepAlive)
+tail -f ~/Library/Logs/ai-dashboard.log
 # Jira (optional): token from id.atlassian.com, then
-security add-generic-password -s goblin-jira -a eric@hivebrite.com -w <token>
+security add-generic-password -s ai-dashboard-jira -a eric@hivebrite.com -w <token>
 ```
 
-Data: `~/.claude/pr-autoreview/goblin.db`. Repos, sizes, Jira JQL, stack command: `server/config.mjs`.
+Data: `~/.claude/pr-autoreview/ai-dashboard.db`. Repos, sizes, Jira JQL, stack command: `server/config.mjs`.

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { git } from './sh.mjs';
 
@@ -41,12 +41,11 @@ export async function taskWorktree(repo, task) {
 
 /** Detached checkout of a teammate's PR head, refreshed to its latest commit. */
 export async function reviewWorktree(repo, pr) {
-  const ref = `refs/goblin/pr-${pr.number}`;
+  const ref = `refs/ai-dashboard/pr-${pr.number}`;
   await git(repo.path, ['fetch', '--quiet', '--force', 'origin', pr.base, `pull/${pr.number}/head:${ref}`]);
   const dir = wtDir(repo, `review-${pr.number}`);
   if (existsSync(dir)) await git(dir, ['checkout', '--quiet', '--detach', '--force', ref]);
   else await git(repo.path, ['worktree', 'add', '--quiet', '--detach', dir, ref]);
-  mkdirSync(join(dir, '.goblin'), { recursive: true });
   return dir;
 }
 
