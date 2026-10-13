@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Goblin</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>👺 Goblin</h1>
+  <nav id="tabs">
+    <button data-tab="tasks" class="on">Tâches <span class="count" id="cTasks"></span></button>
+    <button data-tab="reviews">Reviews <span class="count" id="cReviews"></span></button>
+    <button data-tab="sessions">Sessions <span class="count" id="cSessions"></span></button>
+    <button data-tab="stack">Stack <span class="dot" id="stackDot"></span></button>
+  </nav>
+  <span class="spacer"></span>
+  <span class="muted small" id="syncInfo"></span>
+  <button id="syncBtn">Sync</button>
+  <button class="primary" id="customBtn">+ Prompt libre</button>
+</header>
+
+<div id="banner"></div>
+
+<main>
+  <section id="tab-tasks" class="tab on"></section>
+  <section id="tab-reviews" class="tab"></section>
+  <section id="tab-sessions" class="tab"></section>
+  <section id="tab-stack" class="tab"></section>
+</main>
+
+<dialog id="modal">
+  <form method="dialog" id="choreForm">
+    <h2 id="mTitle"></h2>
+    <p class="muted small" id="mSub"></p>
+    <div class="grid2">
+      <label>Modèle <select id="mModel"></select></label>
+      <label>Effort <select id="mEffort"></select></label>
+    </div>
+    <label>Prompt <textarea id="mPrompt" rows="14"></textarea></label>
+    <p class="muted small" id="mNote"></p>
+    <div class="actions">
+      <button value="cancel" formnovalidate>Annuler</button>
+      <button class="primary" id="mStart" value="start">Start session</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast"></div>
+<script src="/app.js" type="module"></script>
+</body>
+</html>
