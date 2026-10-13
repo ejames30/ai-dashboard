@@ -57,7 +57,7 @@ export const config = {
     hours: [8, 20], // automatic checks only from 8:00 to 20:00; outside, a manual check still works
   },
 
-  // Slack triage through the claude.ai connector (read-only tools), 8h–20h every 10 min.
+  // Slack triage through the claude.ai connector (read-only tools), weekdays 8h–20h, every 10 min.
   slack: {
     enabled: true,
     me: 'Eric James',
@@ -67,7 +67,7 @@ export const config = {
     channels: ['#squad-mobile', '#squad-mobile-pr', '#mobile-app-testing-result', '#incidents', '#releases'],
     model: 'haiku', // "Analyse fine" in the UI runs it with sonnet
     everyMs: 10 * 60_000,
-    hours: [8, 20], // every day, like the radar; outside, "Trier" / ⟳ still works
+    hours: [8, 20], // Monday–Friday only; outside, "Trier" / ⟳ still works
   },
 
   syncEveryMs: 3 * 60_000,
