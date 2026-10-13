@@ -70,6 +70,9 @@ export const config = {
     hours: [8, 20], // Monday–Friday only; outside, "Trier" / ⟳ still works
   },
 
+  // Fleet: every Claude Code session on this Mac touched in the last `days`.
+  fleet: { days: 3 },
+
   // Stand-up written automatically on weekdays at this hour, for the previous working day.
   standup: { hour: 9 },
 

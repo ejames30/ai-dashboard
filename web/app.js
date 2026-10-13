@@ -50,6 +50,7 @@ const PAGES = {
   usage: ['Conso IA', 'Tokens et coût estimé de TOUTES tes sessions Claude Code sur ce Mac'],
   data: ['Journal & base', 'Tout ce que la machine fait, et ta base locale SQLite interrogeable'],
   brutal: ['Brutal reviews', 'Chaque review faite par Claude : verdict, findings, coût'],
+  fleet: ['Flotte', 'Toutes tes sessions Claude Code sur ce Mac — par repo et worktree, avec subagents, coût et échanges'],
   atelier: ['Atelier', 'Tes worktrees, tes agents, leurs PR et tickets — déplace, ajoute, relie'],
   sessions: ['Sessions', 'Chaque session Claude lancée depuis le dashboard'],
   stack: ['Stack local', 'Metro sur un checkout détaché, jamais ton clone principal'],
@@ -1056,11 +1057,175 @@ document.addEventListener('focusout', (e) => {
 });
 RENDER.atelier = renderAtelier;
 
+// ---- fleet: every Claude session on this Mac, Agent-Fleet style --------------------------
+const FLEET_STATUS = { working: ['emerald', '●', 'Working'], input: ['pink', '✋', 'Attend ta réponse'], idle: ['faint', '○', 'Idle'], ended: ['faint', '·', 'Fermée'] };
+const hue = (s) => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+const sColor = (s) => `hsl(${hue(s.sid)} 70% 62%)`;
+const sinceIdle = (s) => (s.status === 'working' ? 'active now' : `idle ${ago(s.last_at)}`);
+const repoLabel = (r) => (r.includes('/') && !r.startsWith('~') ? r.split('/')[1] : r.replace(/^~\//, ''));
+function fleetGroups(list) {
+  const repos = new Map();
+  for (const s of list) {
+    const r = repos.get(s.repo) ?? { repo: s.repo, wts: new Map(), cost: 0, n: 0 };
+    const w = r.wts.get(s.worktree) ?? { path: s.worktree, main: s.main, branch: s.branch, gone: s.gone, name: s.wtName, sessions: [] };
+    w.sessions.push(s); r.wts.set(s.worktree, w); r.cost += s.cost; r.n += 1; repos.set(s.repo, r);
+  }
+  return [...repos.values()].sort((a, b) => b.cost - a.cost).map((r) => ({ ...r, wts: [...r.wts.values()].sort((a, b) => (b.main - a.main) || (b.sessions[0].last_at ?? '').localeCompare(a.sessions[0].last_at ?? '')) }));
+}
+const subDots = (subs) => `<span class="sdots">${subs.slice(-40).map((a) => `<i class="${a.running ? 'run' : ''}" style="opacity:${a.running ? 1 : Math.min(1, 0.25 + Math.log10(1 + a.size / 2e4) / 2)}" title="${esc(a.desc)}${a.running ? ' — en cours' : ''}"></i>`).join('')}</span>`;
+const lastLine = (s) => (s.last.tool ? `<span class="ll tool">›_ ${esc(s.last.tool)}</span>` : `<span class="ll">💬 ${esc((s.last.text ?? '').replace(/\s+/g, ' '))}</span>`);
+function fleetCard(s, total) {
+  const [c, ico] = FLEET_STATUS[s.status];
+  return `<div class="fc st-${s.status}" data-fleet="${s.sid}" style="--sc:${sColor(s)}">
+    <div class="fc-h"><b>${esc(s.name)}</b><span class="fdot c-${c}" title="${FLEET_STATUS[s.status][2]}">${ico}</span></div>
+    <div class="fc-t">${esc(s.title)}</div>
+    <div class="fc-l">${lastLine(s)}</div>
+    <div class="fc-s">${s.subagents.length} subagent${s.subagents.length > 1 ? 's' : ''}${s.subagents.some((a) => a.running) ? ` · <b style="color:var(--emerald)">${s.subagents.filter((a) => a.running).length} en cours</b>` : ''}</div>${subDots(s.subagents)}
+    <div class="fc-f"><b>${money(s.cost)}</b><span>${sinceIdle(s)}</span></div>
+    ${s.prs.length ? `<div class="fc-prs">${s.prs.slice(-3).map((p) => `<a href="${esc(p.url)}" target="_blank">#${p.number}</a>`).join(' ')}</div>` : ''}
+  </div>`;
+}
+function renderFleet() {
+  const fl = S.fleet;
+  if (!fl) return ($('#r-fleet').innerHTML = '<div class="panel"><div class="empty">Lecture des sessions…</div></div>');
+  const all = fl.sessions;
+  const view = chip('fleet', 'view', 'org');
+  filterBar('fleet', {
+    search: 'Rechercher (session, titre, branche, PR)…',
+    chips: [
+      { name: 'view', options: [['org', '1a Org chart'], ['board', '1b Board'], ['timeline', '1c Timeline']] },
+      { name: 'st', options: [['all', 'Toutes', all.length], ['live', 'Ouvertes', all.filter((s) => s.status !== 'ended').length], ['working', 'Working', all.filter((s) => s.status === 'working').length]] },
+    ],
+    selects: [{ name: 'repo', all: 'Tous les repos', options: [...new Set(all.map((s) => s.repo))].map((r) => [r, repoLabel(r)]) }],
+  });
+  const f = fget('fleet');
+  const st = chip('fleet', 'st', 'all');
+  const list = all.filter((s) => (st === 'all' || (st === 'live' ? s.status !== 'ended' : s.status === st)) && (!sel('fleet', 'repo') || s.repo === sel('fleet', 'repo'))
+    && textMatch(f.q, s.name, s.title, s.branch, s.cwd, ...s.prs.map((p) => `#${p.number}`)));
+  const total = list.reduce((a, s) => a + s.cost, 0);
+  const subsAll = list.flatMap((s) => s.subagents);
+  const count = (k) => list.filter((s) => s.status === k).length;
+  const head = `<div class="fhead">
+    <span><i class="fdot c-emerald">●</i> <b>${count('working')}</b> working</span><span><i class="fdot c-pink">✋</i> <b>${count('input')}</b> attendent</span>
+    <span><i class="fdot c-faint">○</i> <b>${count('idle')}</b> idle</span><span>⑂ <b>${subsAll.filter((a) => a.running).length}</b> of ${subsAll.length} subagents running</span>
+    <span class="spacer"></span><span class="ftotal">${money(total)} <small>total · ${fl.days} j</small></span><span class="badge ok"><span class="dot live"></span> Live · 5s</span></div>
+    <div class="fbar">${[...list].sort((a, b) => b.cost - a.cost).filter((s) => s.cost > 0).map((s) => `<i style="flex:${s.cost};background:${sColor(s)}" title="${esc(s.name)} · ${money(s.cost)}"></i>`).join('')}</div>`;
+  const groups = fleetGroups(list);
+  let body = '';
+  if (view === 'org') {
+    body = `<div class="forg" id="fOrg">${groups.map((g) => `<div class="frepo">
+      <div class="frepo-h"><span>🗀</span><b>${esc(repoLabel(g.repo))}</b><span class="muted">${g.n} session${g.n > 1 ? 's' : ''} · ${g.wts.length} worktree${g.wts.length > 1 ? 's' : ''} · ${money(g.cost)}</span><span class="spacer"></span>
+        ${S.fleet.worktrees.some((w) => w.repo === g.repo) ? `<button class="ghost" data-fwt="${esc(g.repo)}">＋ Worktree</button>` : ''}</div>
+      <div class="fcols">${g.wts.map((w) => `<div class="fcol">
+        <div class="fcol-h">${w.main ? `⌂ Main checkout <span class="badge">${esc(w.branch ?? 'main')}</span>` : `⑂ <span title="${esc(w.path)}">${esc(w.branch && w.branch !== 'HEAD' ? w.branch : w.name)}</span>${w.gone ? ' <span class="badge">supprimé</span>' : ''}`}
+          ${!w.main && S.fleet.worktrees.some((x) => x.path === w.path) ? `<button class="ghost tiny" data-wtrm="${esc(w.path)}" title="Supprimer ce worktree">🗑</button>` : ''}</div>
+        ${w.sessions.map((s) => fleetCard(s, total)).join('')}</div>`).join('')}</div></div>`).join('')}
+      <svg class="ftalk" id="fTalk"></svg></div>`;
+  } else if (view === 'board') {
+    body = `<div class="panel fboard"><div class="scroll"><table>
+      <colgroup><col style="width:130px"><col style="width:220px"><col><col style="width:200px"><col style="width:180px"><col style="width:200px"></colgroup>
+      <thead><tr><th>Status</th><th>Session</th><th>Working on</th><th>Subagents</th><th>Cost</th><th>Talks to</th></tr></thead>
+      ${groups.map((g) => `<tbody><tr class="fgrp"><td colspan="6"><b>🗀 ${esc(repoLabel(g.repo))}</b> <span class="muted">${g.n} sessions · ${money(g.cost)}</span></td></tr>
+        ${g.wts.map((w) => `<tr class="fwt"><td colspan="6">${w.main ? `⌂ Main checkout <span class="badge">${esc(w.branch ?? '')}</span>` : `⑂ ${esc(w.branch && w.branch !== 'HEAD' ? w.branch : w.name)}${w.gone ? ' <span class="badge">supprimé</span>' : ''}`}</td></tr>
+          ${w.sessions.map((s) => { const [c, ico, lab] = FLEET_STATUS[s.status]; const pct = total ? (s.cost / total) * 100 : 0; return `<tr class="clickable frow st-${s.status}" data-fleet="${s.sid}">
+            <td><span class="fdot c-${c}">${ico}</span> ${lab}</td>
+            <td><div class="title" style="border-left:3px solid ${sColor(s)};padding-left:8px">${esc(s.name)}</div><div class="sub" style="padding-left:11px">${sinceIdle(s)}</div></td>
+            <td><div class="title">${esc(s.title)}</div><div class="sub">${lastLine(s)}</div></td>
+            <td><div class="small muted">${s.subagents.length} subagents</div>${subDots(s.subagents)}</td>
+            <td><div class="fcost"><b>${money(s.cost)}</b><span>${pct.toFixed(1)}%</span></div><div class="fpct"><i style="width:${pct}%;background:${sColor(s)}"></i></div></td>
+            <td class="small">${Object.entries(s.talks).map(([k, n]) => `<div>⇆ ${esc(k)} <span class="faint">${n} msg</span></div>`).join('') || '<span class="faint">–</span>'}</td></tr>`; }).join('')}`).join('')}</tbody>`).join('')}
+      </table></div></div>`;
+  } else {
+    body = `<div class="panel"><h2>Activité · 24 h <span class="faint" style="text-transform:none;letter-spacing:0">une case = 15 min, plus vif = plus de tokens</span></h2><div id="fTimeline" class="ftl"><div class="empty">Chargement…</div></div></div>`;
+    loadTimeline(list);
+  }
+  $('#r-fleet').innerHTML = head + (list.length ? body : '<div class="panel"><div class="empty">Aucune session sur la période.</div></div>');
+  if (view === 'org') requestAnimationFrame(drawTalks);
+}
+function drawTalks() {
+  const org = $('#fOrg'), svg = $('#fTalk');
+  if (!org || !svg) return;
+  const box = org.getBoundingClientRect();
+  svg.setAttribute('width', org.scrollWidth); svg.setAttribute('height', org.scrollHeight);
+  const byName = new Map(S.fleet.sessions.map((s) => [s.name, s]));
+  const center = (sid) => { const el = org.querySelector(`[data-fleet="${sid}"]`); if (!el) return null; const r = el.getBoundingClientRect(); return [r.left - box.left + r.width / 2, r.top - box.top + r.height / 2, r]; };
+  let out = '';
+  for (const s of S.fleet.sessions) for (const [to, n] of Object.entries(s.talks)) {
+    const t = byName.get(to); if (!t) continue;
+    const a = center(s.sid), b = center(t.sid); if (!a || !b) continue;
+    const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2 + 40;
+    out += `<path d="M${a[0]},${a[1]} Q${mx},${my} ${b[0]},${b[1]}"/><circle cx="${mx}" cy="${(a[1] + b[1]) / 2 + 20}" r="10"/><text x="${mx}" y="${(a[1] + b[1]) / 2 + 24}">${n}</text>`;
+  }
+  svg.innerHTML = out;
+}
+async function loadTimeline(list) {
+  const r = await fetch('/api/fleet/timeline?hours=24'); if (!r.ok) return;
+  const { bins } = await r.json();
+  const by = new Map(); for (const b of bins) { if (!by.has(b.sid)) by.set(b.sid, new Map()); by.get(b.sid).set(b.bin, b); }
+  const max = Math.max(0.01, ...bins.map((b) => b.cost));
+  const rows = list.filter((s) => by.has(s.sid));
+  const now = new Date();
+  const el = $('#fTimeline'); if (!el) return;
+  el.innerHTML = `<div class="ftl-axis"><span></span>${Array.from({ length: 96 }, (_, i) => { const d = new Date(now - (96 - i) * 900_000); return `<em>${i % 8 === 0 ? `${d.getHours()}h` : ''}</em>`; }).join('')}</div>
+    ${rows.map((s) => `<div class="ftl-row" data-fleet="${s.sid}"><span title="${esc(s.title)}"><i style="background:${sColor(s)}"></i>${esc(s.name)}</span>${Array.from({ length: 96 }, (_, i) => { const b = by.get(s.sid).get(i); return `<b style="${b ? `background:${sColor(s)};opacity:${0.25 + 0.75 * Math.sqrt(b.cost / max)}` : ''}" ${b ? `title="${money(b.cost)} · ${b.n} appels"` : ''}></b>`; }).join('')}</div>`).join('') || '<div class="empty">Aucune activité sur 24 h.</div>'}`;
+}
+window.addEventListener('resize', () => pageFromHash() === 'fleet' && drawTalks());
+RENDER.fleet = renderFleet;
+
+// Worktree panel (＋ Worktree on a repo): create one, optionally start a session in it; remove.
+function openWorktreePanel(repo) {
+  const wts = S.fleet.worktrees.filter((w) => w.repo === repo);
+  const main = S.fleet.worktrees.find((w) => w.repo === repo && !w.path.includes('/.claude/worktrees/') && w.branch === 'master') ?? wts[0];
+  $('#wtDialog').innerHTML = `<form method="dialog" class="wtform">
+    <div class="drawer-head" style="padding:0 0 12px"><div><h2>${esc(repoLabel(repo))}</h2><div class="muted small">${wts.length} worktrees · ${S.fleet.sessions.filter((s) => s.repo === repo).length} sessions</div></div><button class="ghost" value="cancel">✕</button></div>
+    <div class="panel" style="padding:14px 16px;margin:0"><b>⑂ Nouveau worktree</b>
+      <label>Nom de branche <input id="wtName" placeholder="MO-1234-short-description" autocomplete="off"></label>
+      <label>Branche de base <input id="wtBase" value="master"></label>
+      <label class="row"><input type="checkbox" id="wtSession" checked> Lancer une session Claude dedans</label>
+      <div class="mono small faint">git worktree add -b &lt;nom&gt; ${esc(repo.split('/')[1])}/.claude/worktrees/&lt;nom&gt; origin/&lt;base&gt;</div>
+      <div class="actions"><button class="primary" id="wtCreate" value="create" data-repo="${esc(repo)}">Créer</button></div></div>
+    <div class="sect">Worktrees</div>
+    <div class="wtlist">${wts.map((w) => `<div class="wtrow"><span>${w.path === main?.path ? '⌂' : '⑂'}</span><div><b>${esc(w.branch ?? `détaché @ ${w.head}`)}</b><div class="faint small mono">${esc(w.path.replace(/^\/Users\/[^/]+/, '~'))}</div>
+      <div class="small muted">${S.fleet.sessions.filter((s) => s.worktree === w.path).length} session(s)${w.dirty ? ` · <span style="color:var(--amber)">${w.dirty} modif.</span>` : ''}${w.ahead ? ` · ↑${w.ahead}` : ''}${w.behind ? ` · ↓${w.behind}` : ''}</div></div>
+      ${w.path === main?.path ? '<span class="badge">principal</span>' : `<button class="ghost" data-wtrm="${esc(w.path)}">🗑 Supprimer</button>`}</div>`).join('')}</div>
+  </form>`;
+  $('#wtDialog').showModal();
+}
+async function removeWorktree(path) {
+  if (!confirm(`Supprimer le worktree ?\n${path}\n\nLa branche est conservée.`)) return;
+  try { await post('/api/worktree/remove', { path }); toast('Worktree supprimé'); }
+  catch (e) {
+    if (/non commités/.test(e.message) && confirm(`${e.message}\n\nSupprimer quand même (les modifications seront perdues) ?`)) { await post('/api/worktree/remove', { path, force: true }); toast('Worktree supprimé'); }
+    else toast(e.message);
+  }
+  if ($('#wtDialog').open) $('#wtDialog').close();
+}
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('button');
+  if (b?.dataset.fwt) { e.preventDefault(); return openWorktreePanel(b.dataset.fwt); }
+  if (b?.dataset.wtrm) { e.preventDefault(); e.stopPropagation(); return removeWorktree(b.dataset.wtrm); }
+  if (b?.id === 'wtCreate') {
+    e.preventDefault();
+    const name = $('#wtName').value.trim(); if (!name) return toast('Donne un nom de branche');
+    b.disabled = true;
+    try {
+      const { path } = await post('/api/worktree/create', { repo: b.dataset.repo, name, base: $('#wtBase').value.trim() });
+      const withSession = $('#wtSession').checked;
+      $('#wtDialog').close(); toast('Worktree créé ✓');
+      if (withSession) { const key = name.match(/^[A-Z][A-Z0-9]+-\d+/)?.[0]; const t = key && S.tasks.find((x) => x.key === key); openChore({ kind: 'here', cwd: path, ...(t ? { task: t.key, chore: t.next?.key ?? 'start-task' } : { chore: 'custom' }) }); }
+    } catch (err) { toast(err.message); } finally { b.disabled = false; }
+    return;
+  }
+  const card = e.target.closest('[data-fleet]');
+  if (card && pageFromHash() === 'fleet' && !e.target.closest('a, button')) openDrawer(`fleet:${card.dataset.fleet}`);
+});
+
 // ---- session drawer --------------------------------------------------------------
 let openSession = null;
 let convoTimer = null;
 async function loadConvo() {
   if (!openSession) return;
+  if (openSession.startsWith('fleet:')) return loadFleetConvo(openSession.slice(6));
   const res = await fetch(`/api/sessions/${openSession}/transcript`);
   if (!res.ok) return;
   const { session: s, items } = await res.json();
@@ -1079,7 +1244,37 @@ async function loadConvo() {
     if (atBottom) el.scrollTop = el.scrollHeight;
   }
 }
+function paintConvo(items) {
+  const el = $('#sConvo');
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+  const sig = `${items.length}:${items.at(-1)?.text?.length ?? 0}`;
+  if (el.dataset.sig === sig) return;
+  el.dataset.sig = sig;
+  el.innerHTML = items.map((m) => m.role === 'tool' ? `<div class="msg tool"><b>${esc(m.name)}</b> ${esc(m.text)}</div>`
+    : m.role === 'assistant' ? `<div class="msg assistant md">${md(m.text)}</div>` : `<div class="msg user">${esc(m.text)}</div>`).join('') || '<div class="muted">Rien encore…</div>';
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+async function loadFleetConvo(sid) {
+  const res = await fetch(`/api/fleet/${sid}/transcript`);
+  if (!res.ok) return;
+  const { session: s, items } = await res.json();
+  if (s.dashboard) { openSession = s.dashboard; return loadConvo(); }
+  const [c, ico, lab] = FLEET_STATUS[s.status] ?? FLEET_STATUS.ended;
+  $('#sTitle').textContent = s.title ?? s.name;
+  $('#sMeta').innerHTML = `<span class="fdot c-${c}">${ico}</span> ${lab} · ${esc(s.name)} · ${esc(s.branch ?? '')} · ${esc(s.model ?? '')} · <span class="cost">${money(s.cost)}</span> · ${s.subagents?.length ?? 0} subagents`;
+  $('#sLinks').innerHTML = `<button class="ghost" data-fterm="${s.sid}">⌘ Terminal</button>`;
+  const interactive = s.kind === 'interactive';
+  $('#sText').disabled = interactive; $('#sSend').disabled = interactive;
+  $('#sHint').textContent = interactive ? 'Ouverte dans un terminal : réponds-y là-bas.' : s.status === 'ended' ? 'Ton message reprend cette session en arrière-plan, contexte intact.' : 'Ton message interrompt puis relance la session avec lui.';
+  paintConvo(items);
+}
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-fterm]');
+  if (!b) return;
+  try { const r = await post(`/api/fleet/${b.dataset.fterm}/terminal`); toast(r.note ?? 'Ouvert dans Warp'); } catch (err) { toast(err.message); }
+});
 function openDrawer(id) {
+  $('#sText').disabled = false; $('#sSend').disabled = false;
   openSession = id;
   const el = $('#sConvo'); el.innerHTML = ''; el.dataset.sig = '';
   $('#sessionModal').showModal();
@@ -1095,7 +1290,7 @@ async function sendReply(e) {
   if (!text || !openSession) return;
   $('#sSend').disabled = true;
   try {
-    await post(`/api/sessions/${openSession}/reply`, { text });
+    await post(openSession.startsWith('fleet:') ? `/api/fleet/${openSession.slice(6)}/reply` : `/api/sessions/${openSession}/reply`, { text });
     $('#sText').value = '';
     toast('Message envoyé');
     setTimeout(loadConvo, 1500);
@@ -1176,7 +1371,7 @@ function renderChrome() {
 // ---- per-page refresh ---------------------------------------------------------------
 // Which sources each page shows (mirrors SCOPES on the server) and how old each one is.
 const PAGE_SOURCES = {
-  standup: ['github', 'jira'], atelier: ['github'], home: ['github', 'jira', 'slack'], tasks: ['github', 'jira'], jira: ['jira'], epics: ['jira'], reviews: ['github'], radar: ['github'],
+  standup: ['github', 'jira'], atelier: ['github'], fleet: [], home: ['github', 'jira', 'slack'], tasks: ['github', 'jira'], jira: ['jira'], epics: ['jira'], reviews: ['github'], radar: ['github'],
   brutal: ['github'], slack: ['slack'], sessions: [], usage: ['usage'], stack: [], data: ['usage'],
 };
 const SOURCE_LABEL = { github: 'GitHub', jira: 'Jira', slack: 'Slack', usage: 'Transcripts' };
@@ -1218,6 +1413,7 @@ setInterval(renderFresh, 15_000);
 const PAGE_FN = {
   standup: [() => renderStandup(), ['standups']],
   atelier: [() => renderAtelier(), ['graph', 'sessions', 'tasks', 'reviews', 'epics']],
+  fleet: [() => renderFleet(), ['fleet']],
   home: [() => renderHome(), ['sessions', 'tasks', 'reviews', 'reviewHistory', 'slack']],
   tasks: [() => renderTasks(), ['tasks', 'chores']], jira: [() => renderJira(), ['tasks', 'jira']], epics: [() => renderEpics(), ['epics']],
   reviews: [() => renderReviews(), ['reviews', 'autoReview', 'team']], radar: [() => renderRadar(), ['autoReview', 'sessions', 'reviewHistory', 'events']],
@@ -1234,6 +1430,7 @@ function renderCounts() {
   n('#c-brutal', (S.reviewHistory ?? []).filter((r) => new Date(r.started_at) >= startOfDay()).length);
   n('#c-slack', (S.slack?.items ?? []).filter((i) => i.status === 'new' && i.priority !== 'fyi').length);
   n('#c-sessions', S.sessions.filter((x) => ACTIVE.includes(x.state)).length);
+  n('#c-fleet', (S.fleet?.sessions ?? []).filter((x) => x.status === 'working' || x.status === 'input').length);
   n('#c-home', actionItems().filter((i) => i.w <= 1).length);
   const live = S.sessions.filter((x) => x.chore === 'auto-review' && ACTIVE.includes(x.state));
   $('#radarDot').className = `dot ${live.length ? 'live' : S.autoReview?.enabled ? 'ok' : ''}`;
@@ -1334,7 +1531,7 @@ let gPressed = 0;
 document.addEventListener('keydown', (e) => {
   if (e.target.matches('input, textarea, select') || e.metaKey || e.ctrlKey) return;
   if (e.key === 'g') { gPressed = Date.now(); return; }
-  const map = { w: 'atelier', h: 'home', t: 'tasks', j: 'jira', e: 'epics', r: 'reviews', a: 'radar', b: 'brutal', k: 'slack', s: 'sessions', u: 'usage', l: 'stack', d: 'data' };
+  const map = { f: 'fleet', w: 'atelier', h: 'home', t: 'tasks', j: 'jira', e: 'epics', r: 'reviews', a: 'radar', b: 'brutal', k: 'slack', s: 'sessions', u: 'usage', l: 'stack', d: 'data' };
   if (Date.now() - gPressed < 800 && map[e.key]) { location.hash = map[e.key]; gPressed = 0; }
 });
 

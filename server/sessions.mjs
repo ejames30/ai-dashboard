@@ -111,13 +111,23 @@ function notify(s, state) {
   sh('osascript', ['-e', `display notification "${msg}" with title "Eric's AI Dashboard" subtitle "${title}" sound name "Glass"`]).catch(() => {});
 }
 
+// `claude agents` is a process spawn: one call serves everyone for a few seconds.
+let agentsCache = { at: 0, list: null, p: null };
+export async function liveAgents(maxAgeMs = 4000) {
+  if (agentsCache.list && Date.now() - agentsCache.at < maxAgeMs) return agentsCache.list;
+  agentsCache.p ??= sh('claude', ['agents', '--json', '--all'], { timeout: 30_000 })
+    .then((out) => { agentsCache = { at: Date.now(), list: JSON.parse(out), p: null }; return agentsCache.list; })
+    .catch(() => { agentsCache.p = null; return agentsCache.list; });
+  return agentsCache.p;
+}
+
 /** Refresh every non-terminal session. Returns true when something changed. */
 export async function pollSessions(onReviewDone) {
   const since = new Date(Date.now() - POLL_WINDOW_MS).toISOString();
   const open = db.prepare(`SELECT * FROM sessions WHERE started_at > ? AND state NOT IN (${[...TERMINAL].map(() => '?').join(',')})`).all(since, ...TERMINAL);
   if (!open.length) return false;
-  let agents;
-  try { agents = JSON.parse(await sh('claude', ['agents', '--json', '--all'], { timeout: 30_000 })); } catch { return false; } // truncated output: next tick
+  const agents = await liveAgents();
+  if (!agents) return false; // truncated output: next tick
   const byId = new Map(agents.map((a) => [a.id, a]));
   let changed = false;
   for (const s of open) {
@@ -148,7 +158,11 @@ const toolSummary = (name, input = {}) =>
 /** The session's conversation, slimmed for display: my messages, Claude's text, its tool calls. */
 export function transcript(session) {
   if (!session.session_id) return [];
-  const path = transcriptPath(session.cwd, session.session_id);
+  return transcriptFile(transcriptPath(session.cwd, session.session_id));
+}
+
+/** Same, from a transcript file path (the fleet knows the file, not the launch cwd). */
+export function transcriptFile(path) {
   if (!existsSync(path)) return [];
   const items = [];
   const seen = new Set();

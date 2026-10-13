@@ -9,18 +9,20 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AUTO_REVIEW_CHORE, BATCH, CHORES, CUSTOM, EFFORTS, EPIC_PLAN, MODELS, REVIEW_CHORE, STANDUP, choreByKey, nextChore } from './chores.mjs';
 import { config, repoBySlug, sizeOf } from './config.mjs';
-import { db, kv, logEvent, update, version } from './db.mjs';
+import { bump, db, kv, logEvent, update, version } from './db.mjs';
 import { autoReviewState, runAutoReview } from './autoreview.mjs';
 import { syncGithub } from './github.mjs';
 import { setSlackStatus, slackItems, syncSlack } from './slack.mjs';
 import { generateStandup, listStandups, standupTick } from './standup.mjs';
 import { graphOps, graphState, isWorktree, scanWorktrees } from './graph.mjs';
+import { fleetFile, fleetRow, fleetState, fleetTimeline, scanFleet } from './fleet.mjs';
 import { scanUsage, usageStats } from './usage.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { jiraSource, resetJiraToken, syncJira } from './jira.mjs';
-import { PLAN_TOOLS, launch, listSessions, slim, openInTerminal, openTerminalAt, pollSessions, postDraftReview, replySession, reviewFromTranscript, stopSession, transcript } from './sessions.mjs';
+import { PLAN_TOOLS, launch, listSessions, liveAgents, slim, openInTerminal, openTerminalAt, transcriptFile, pollSessions, postDraftReview, replySession, reviewFromTranscript, stopSession, transcript } from './sessions.mjs';
 import { onStackLog, refreshStack, stackStatus, startStack, stopStack, switchStack } from './stack.mjs';
 import { reviewWorktree, scratchWorktree, taskWorktree } from './worktrees.mjs';
+import { sh } from './sh.mjs';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '../web');
 
@@ -138,6 +140,7 @@ async function state() {
     db: cached('db', TABLES, () => ({ path: join(config.dataDir, 'ai-dashboard.db'), tables: Object.fromEntries(TABLES.map((t) => [t, db.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n])) })),
     standups: cached('standups', ['standups'], listStandups),
     graph: cached('graph', ['graph', 'worktrees'], graphState),
+    fleet: cached('fleet', ['fleetLive'], () => fleetSnap),
     chores: CHORE_LIST,
     models: MODELS,
     efforts: EFFORTS,
@@ -204,11 +207,12 @@ const SOURCES = {
   usage: () => scanUsage().then(() => kv.set('usageScannedAt', new Date().toISOString())),
   stack: async () => {},
   graph: () => scanWorktrees(),
+  fleet: () => scanWorktrees().then(fleetTick),
 };
 const SCOPES = {
   home: ['github', 'jira', 'slack', 'sessions'], tasks: ['github', 'jira', 'sessions'], jira: ['jira'], epics: ['jira', 'sessions'],
   reviews: ['github', 'sessions'], radar: ['radar', 'sessions'], brutal: ['github', 'sessions'], slack: ['slack'],
-  sessions: ['sessions'], usage: ['usage'], stack: ['stack'], data: ['usage'], atelier: ['graph', 'sessions', 'github'],
+  sessions: ['sessions'], usage: ['usage'], stack: ['stack'], data: ['usage'], atelier: ['graph', 'sessions', 'github'], fleet: ['fleet', 'usage'],
 };
 async function refresh(scope) {
   const names = SCOPES[scope] ?? Object.keys(SOURCES);
@@ -239,9 +243,24 @@ setInterval(sync, config.syncEveryMs);
 setInterval(() => pollSessions(onReviewDone).then((c) => c && pushState()).catch((e) => console.error('poll', e.message)), config.sessionPollMs);
 setInterval(pushState, 15_000); // stack status, relative times
 const usageTick = () => scanUsage().then((n) => { kv.set('usageScannedAt', new Date().toISOString()); if (n) pushState(); }).catch((e) => console.error('usage', e.message));
-setInterval(usageTick, 5 * 60_000);
+setInterval(usageTick, 60_000);
 usageTick();
 setInterval(() => standupTick()?.finally(pushState), 60_000);
+// Fleet: fold new transcript bytes + live status every 5 s; push only when the picture changed.
+let fleetSnap = null, fleetJson = '';
+let fleetBusy = false;
+const fleetTick = async () => {
+  if (fleetBusy) return;
+  fleetBusy = true;
+  try {
+    await scanFleet();
+    const f = await fleetState();
+    const j = JSON.stringify(f);
+    if (j !== fleetJson) { fleetJson = j; fleetSnap = f; bump('fleetLive'); pushState(); }
+  } catch (e) { console.error('fleet', e.message); } finally { fleetBusy = false; }
+};
+setInterval(fleetTick, 5000);
+fleetTick();
 const wtTick = () => scanWorktrees().then(pushState).catch((e) => console.error('worktrees', e.message));
 setInterval(wtTick, 2 * 60_000);
 wtTick();
@@ -344,6 +363,13 @@ createServer(async (req, res) => {
       return res.end(await readFile(join(WEB, file)));
     }
     if (req.method === 'GET' && pathname === '/api/state') return json(res, 200, await state());
+    if (req.method === 'GET' && pathname === '/api/fleet/timeline') return json(res, 200, { bins: fleetTimeline(Number(searchParams.get('hours') ?? 24)) });
+    const ft = pathname.match(/^\/api\/fleet\/([0-9a-f-]{36})\/transcript$/);
+    if (req.method === 'GET' && ft) {
+      const f = fleetSnap?.sessions.find((x) => x.sid === ft[1]) ?? fleetRow(ft[1]);
+      if (!f) throw httpError(404, 'session not found');
+      return json(res, 200, { session: f, items: transcriptFile(fleetFile(ft[1])) });
+    }
     if (req.method === 'GET' && pathname === '/api/usage') return json(res, 200, usageStats(Object.fromEntries(searchParams)));
     if (req.method === 'GET' && pathname === '/api/chore') {
       const d = choreDefaults(Object.fromEntries(searchParams));
@@ -384,6 +410,49 @@ createServer(async (req, res) => {
       if (pathname === '/api/standup') { generateStandup({ model: body.model === 'opus' ? 'opus' : 'sonnet' }).finally(pushState); pushState(); return json(res, 202, { ok: true }); }
       const g = pathname.match(/^\/api\/graph\/(pos|resetPos|addNode|editNode|deleteNode|addEdge|deleteEdge)$/);
       if (g) { const id = graphOps[g[1]](body); pushState(); return json(res, 200, { ok: true, id }); }
+      const fr = pathname.match(/^\/api\/fleet\/([0-9a-f-]{36})\/(reply|terminal)$/);
+      if (fr) {
+        const f = fleetSnap?.sessions.find((x) => x.sid === fr[1]);
+        if (!f) throw httpError(404, 'session not found');
+        const live = ((await liveAgents(0)) ?? []).find((a) => a.sessionId === f.sid);
+        if (fr[2] === 'terminal') {
+          await openTerminalAt(f.cwd, live?.kind === 'background' ? `claude attach ${live.id}` : live ? null : `claude --resume ${f.sid}`, f.name);
+          return json(res, 200, { ok: true, note: live?.kind === 'interactive' ? 'déjà ouverte dans un autre terminal' : null });
+        }
+        const text = String(body.text ?? '').trim();
+        if (!text) throw httpError(400, 'empty message');
+        if (live?.kind === 'interactive') throw httpError(409, 'Session ouverte dans un terminal : réponds-y là-bas (ou ferme-la pour la reprendre ici).');
+        if (live) { await sh('claude', ['stop', live.id]).catch(() => {}); await new Promise((r) => setTimeout(r, 1500)); }
+        await sh('claude', ['--bg', '--resume', f.sid, '--', text], { cwd: f.cwd, timeout: 60_000 });
+        logEvent('fleet-reply', `Message envoyé à ${f.name} : ${text.slice(0, 120)}`);
+        setTimeout(fleetTick, 2000);
+        return json(res, 200, { ok: true });
+      }
+      if (pathname === '/api/worktree/create') {
+        const repo = repoBySlug(body.repo);
+        const name = String(body.name ?? '').trim();
+        if (!repo || !/^[A-Za-z0-9][A-Za-z0-9._\/-]{1,80}$/.test(name)) throw httpError(400, 'nom de branche invalide');
+        const base = String(body.base || repo.base);
+        const dir = join(repo.path, '.claude/worktrees', name.replace(/[^A-Za-z0-9_-]/g, '-'));
+        await sh('git', ['fetch', '--quiet', 'origin', base], { cwd: repo.path });
+        await sh('git', ['worktree', 'add', '--quiet', '-b', name, dir, `origin/${base}`], { cwd: repo.path });
+        await scanWorktrees();
+        logEvent('worktree', `Worktree créé : ${name} (depuis ${base})`);
+        pushState();
+        return json(res, 200, { ok: true, path: dir });
+      }
+      if (pathname === '/api/worktree/remove') {
+        const w = db.prepare('SELECT * FROM worktrees WHERE path = ?').get(body.path);
+        if (!w) throw httpError(404, 'worktree inconnu');
+        if (config.repos.some((r) => r.path === w.path)) throw httpError(400, 'le checkout principal ne se supprime pas');
+        if (w.dirty && !body.force) throw httpError(409, `${w.dirty} fichier(s) modifié(s) non commités — confirme la suppression forcée`);
+        const repo = repoBySlug(w.repo);
+        await sh('git', ['worktree', 'remove', ...(body.force ? ['--force'] : []), w.path], { cwd: repo.path });
+        await scanWorktrees();
+        logEvent('worktree', `Worktree supprimé : ${w.path} (branche ${w.branch ?? 'détachée'} conservée)`);
+        pushState();
+        return json(res, 200, { ok: true });
+      }
       if (pathname === '/api/worktree/terminal') {
         if (!isWorktree(body.path)) throw httpError(400, 'unknown worktree');
         await openTerminalAt(body.path, body.claude ? 'claude' : null);
