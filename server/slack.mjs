@@ -45,7 +45,7 @@ async function doSyncSlack({ force = false, model } = {}) {
   if (!c.enabled || running) return { skipped: true };
   const last = kv.get('slack') ?? {};
   const now = new Date();
-  const workHours = now.getDay() >= 1 && now.getDay() <= 5 && now.getHours() >= c.hours[0] && now.getHours() < c.hours[1];
+  const workHours = now.getHours() >= c.hours[0] && now.getHours() < c.hours[1];
   if (!force && (!workHours || (last.at && now - new Date(last.at) < c.everyMs))) return { skipped: true };
   running = true;
   kv.set('slack', { ...last, running: true });
