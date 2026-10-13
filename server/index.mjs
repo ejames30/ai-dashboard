@@ -12,7 +12,7 @@ import { config, repoBySlug, sizeOf } from './config.mjs';
 import { db, kv } from './db.mjs';
 import { syncGithub } from './github.mjs';
 import { jiraSource, resetJiraToken, syncJira } from './jira.mjs';
-import { launch, listSessions, pollSessions, postDraftReview, replySession, stopSession, transcript } from './sessions.mjs';
+import { launch, listSessions, openInTerminal, pollSessions, postDraftReview, replySession, stopSession, transcript } from './sessions.mjs';
 import { onStackLog, refreshStack, stackStatus, startStack, stopStack, switchStack } from './stack.mjs';
 import { reviewWorktree, scratchWorktree, taskWorktree } from './worktrees.mjs';
 
@@ -205,6 +205,13 @@ createServer(async (req, res) => {
         if (!String(body.text ?? '').trim()) throw httpError(400, 'empty message');
         await replySession(session, body.text.trim());
         pushState();
+        return json(res, 200, { ok: true });
+      }
+      const term = pathname.match(/^\/api\/sessions\/([0-9a-f]+)\/terminal$/);
+      if (term) {
+        const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(term[1]);
+        if (!session) throw httpError(404, 'session not found');
+        await openInTerminal(session);
         return json(res, 200, { ok: true });
       }
       const stop = pathname.match(/^\/api\/sessions\/([0-9a-f]+)\/stop$/);

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { db, update, upsert } from './db.mjs';
@@ -156,6 +156,25 @@ export async function replySession(session, text) {
   }
   await sh('claude', ['--bg', '--resume', session.session_id, '--', text], { cwd: session.cwd, timeout: 60_000 });
   update('sessions', { id: session.id }, { state: 'running', ended_at: null });
+}
+
+/**
+ * Open the session in my terminal (Warp) through `claude attach`: same local session,
+ * just a TUI on it. A Warp launch configuration is the only way to make Warp run a command;
+ * Terminal.app is the fallback when Warp isn't there.
+ */
+export async function openInTerminal(session) {
+  const cmd = `claude attach ${session.id}`;
+  if (existsSync('/Applications/Warp.app')) {
+    const dir = join(homedir(), '.warp/launch_configurations');
+    mkdirSync(dir, { recursive: true });
+    const file = `ai-dashboard-${session.id}.yaml`;
+    writeFileSync(join(dir, file), `---\nname: ai-dashboard-${session.id}\nwindows:\n  - tabs:\n      - title: ${JSON.stringify(session.name)}\n        layout:\n          cwd: ${JSON.stringify(session.cwd)}\n          commands:\n            - exec: ${JSON.stringify(cmd)}\n`);
+    await sh('open', [`warp://launch/${file}`]);
+    return;
+  }
+  const script = `cd ${JSON.stringify(session.cwd)} && ${cmd}`.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  await sh('osascript', ['-e', `tell application "Terminal" to do script "${script}"`, '-e', 'tell application "Terminal" to activate']);
 }
 
 export async function stopSession(id) {

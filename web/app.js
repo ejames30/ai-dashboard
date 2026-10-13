@@ -52,7 +52,7 @@ const costCell = (t) => (t.sessionCount ? `<span class="cost">${money(t.cost)}</
 const SEL = new Set(); // ticket keys picked for a multi-ticket session
 const selCell = (key) => `<td class="sel"><input type="checkbox" data-sel="${esc(key)}" ${SEL.has(key) ? 'checked' : ''} aria-label="Sélectionner ${esc(key)}"></td>`;
 const sessionLink = (s) => `<a href="#" data-open-session="${s.id}" title="Voir la conversation">${sessionBadge(s)}</a>`;
-const rcLink = (s) => (s.rc_url ? `<a href="${esc(s.rc_url)}" target="_blank" rel="noopener">ouvrir ↗</a>` : '');
+const rcLink = (s) => `<button class="ghost" data-term="${s.id}" title="claude attach dans Warp">Terminal</button>${s.rc_url ? ` <a href="${esc(s.rc_url)}" target="_blank" rel="noopener" class="small muted">web ↗</a>` : ''}`;
 
 // ---- tasks -----------------------------------------------------------------
 function renderTasks() {
@@ -340,7 +340,7 @@ function renderHeader() {
   if (S.jira.error && !S.jira.running) parts.push(`⚠ Jira : ${esc(S.jira.error)}`);
   if (sync?.errors.length) parts.push(`⚠ ${sync.errors.map(esc).join(' · ')}`);
   const blocked = S.sessions.filter((s) => s.state === 'blocked');
-  if (blocked.length) parts.push(`<b>${blocked.length} session(s) attendent ta réponse :</b> ${blocked.map((s) => `${rcLink(s) ? `<a href="${esc(s.rc_url)}" target="_blank">${esc(s.name)}</a>` : esc(s.name)}`).join(', ')}`);
+  if (blocked.length) parts.push(`<b>${blocked.length} session(s) attendent ta réponse :</b> ${blocked.map((s) => `<a href="#" data-open-session="${s.id}">${esc(s.name)}</a>`).join(', ')}`);
   $('#banner').innerHTML = parts.join('<br>');
   document.title = blocked.length ? `(${blocked.length}) Eric's AI Dashboard` : "Eric's AI Dashboard";
 }
@@ -394,6 +394,7 @@ document.addEventListener('click', async (e) => {
   try {
     if (b.dataset.chore && b.dataset.task) return openChore({ kind: 'task', task: b.dataset.task, chore: b.dataset.chore });
     if (b.dataset.review) return openChore({ kind: 'review', repo: b.dataset.repo, pr: b.dataset.review });
+    if (b.dataset.term) { await post(`/api/sessions/${b.dataset.term}/terminal`); return toast('Ouvert dans le terminal'); }
     if (b.dataset.stop) { await post(`/api/sessions/${b.dataset.stop}/stop`); return toast('Session arrêtée'); }
     if (b.dataset.stackBranch) { await post('/api/stack/switch', { branch: b.dataset.stackBranch }); location.hash = 'stack'; return; }
     if (b.dataset.stackPr) { await post('/api/stack/switch', { pr: b.dataset.stackPr }); location.hash = 'stack'; return; }
