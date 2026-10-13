@@ -165,22 +165,49 @@ const pushState = () => {
 onStackLog((line) => broadcast('stacklog', line));
 
 // ---- sync loops --------------------------------------------------------------
-let syncing = false;
+// GitHub + the auto-review check; concurrent callers share the run in flight.
+let ghFlight = null;
+function githubNow() {
+  ghFlight ??= (async () => {
+    const errors = [];
+    await syncGithub().catch((e) => errors.push(`GitHub: ${e.message}`));
+    await runAutoReview(startAutoReview)
+      .then((n) => n.length && console.log(`auto-review started for #${n.join(', #')}`))
+      .catch((e) => errors.push(`Auto-review: ${e.message}`));
+    kv.set('sync', { at: new Date().toISOString(), errors });
+    pushState();
+    if (errors.length) throw new Error(errors.join(' · '));
+  })().finally(() => { ghFlight = null; });
+  return ghFlight;
+}
+
 async function sync({ force = false } = {}) {
-  // Jira can take ~40s through the connector: it runs on its own and pushes when it lands.
+  // Jira / Slack go through headless Claude (tens of seconds): they push when they land.
   syncJira({ force }).catch((e) => console.error('jira', e.message)).finally(pushState);
   syncSlack({ force }).catch((e) => console.error('slack', e.message)).finally(pushState);
   pushState();
-  if (syncing) return;
-  syncing = true;
-  const errors = [];
-  await syncGithub().catch((e) => errors.push(`GitHub: ${e.message}`));
-  await runAutoReview(startAutoReview)
-    .then((n) => n.length && console.log(`auto-review started for #${n.join(', #')}`))
-    .catch((e) => errors.push(`Auto-review: ${e.message}`));
-  kv.set('sync', { at: new Date().toISOString(), errors });
-  syncing = false;
+  await githubNow().catch(() => {});
+}
+
+// "Refresh this page": exactly the sources a page shows, forced, awaited.
+const SOURCES = {
+  github: () => githubNow(),
+  jira: () => syncJira({ force: true }),
+  slack: () => syncSlack({ force: true }),
+  sessions: () => pollSessions(onReviewDone),
+  usage: () => scanUsage().then(() => kv.set('usageScannedAt', new Date().toISOString())),
+  stack: async () => {},
+};
+const SCOPES = {
+  home: ['github', 'jira', 'slack', 'sessions'], tasks: ['github', 'jira', 'sessions'], jira: ['jira'], epics: ['jira', 'sessions'],
+  reviews: ['github', 'sessions'], radar: ['github', 'sessions'], brutal: ['github', 'sessions'], slack: ['slack'],
+  sessions: ['sessions'], usage: ['usage'], stack: ['stack'], data: ['usage'],
+};
+async function refresh(scope) {
+  const names = SCOPES[scope] ?? Object.keys(SOURCES);
+  const results = await Promise.allSettled(names.map((n) => SOURCES[n]()));
   pushState();
+  return Object.fromEntries(names.map((n, i) => [n, results[i].status === 'fulfilled' ? 'ok' : String(results[i].reason?.message ?? results[i].reason).slice(0, 200)]));
 }
 
 async function onReviewDone(session) {
@@ -339,6 +366,7 @@ createServer(async (req, res) => {
         const rows = ro.prepare(q).all().slice(0, 1000);
         return json(res, 200, { rows });
       }
+      if (pathname === '/api/refresh') return json(res, 200, { results: await refresh(String(body.scope ?? '')) });
       if (pathname === '/api/sync') { resetJiraToken(); await sync({ force: true }); return json(res, 200, { ok: true }); }
       if (pathname === '/api/sessions') { const id = await startSession(body); pushState(); return json(res, 200, { id }); }
       const reply = pathname.match(/^\/api\/sessions\/([0-9a-f]+)\/reply$/);

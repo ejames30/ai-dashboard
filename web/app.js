@@ -60,7 +60,7 @@ function showPage(name) {
   $('#pageSub').textContent = PAGES[name][1];
 }
 document.querySelectorAll('#nav a').forEach((a) => (a.onclick = () => { location.hash = a.dataset.page; }));
-window.addEventListener('hashchange', () => { showPage(pageFromHash()); if (S) render([]); });
+window.addEventListener('hashchange', () => { showPage(pageFromHash()); if (S) { render([]); renderFresh(); } });
 showPage(pageFromHash());
 
 // ---- filter bars -------------------------------------------------------------
@@ -136,6 +136,7 @@ const prState = (pr) => [
   pr.is_draft ? '<span class="badge">draft</span>' : '',
 ].filter(Boolean).join(' ');
 const project = (key) => key.split('-')[0];
+const readyToMerge = (pr) => pr && !pr.is_draft && pr.review_decision === 'APPROVED' && pr.checks === 'SUCCESS' && pr.mergeable === 'MERGEABLE' && !pr.unresolved_threads;
 const what = (s) => { try { const k = s.tasks && JSON.parse(s.tasks); if (k) return k.join(', '); } catch {} return s.title ?? s.task ?? s.epic ?? (s.pr ? `PR #${s.pr}` : 'session libre'); };
 
 // ---- home ----------------------------------------------------------------------
@@ -147,6 +148,9 @@ function actionItems() {
   for (const t of S.tasks.filter((x) => x.pr && x.next)) {
     const urgent = ['fix-conflicts', 'fix-checks', 'address-comments'].includes(t.next.key);
     items.push({ c: urgent ? 'rose' : 'violet', ico: urgent ? '⚠' : '→', t: `${t.key.startsWith('PR-') ? '' : `${t.key} · `}${t.issue?.summary ?? t.pr.title}`, s: `PR #${t.pr.number} · ${prState(t.pr).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')}`, a: `<button class="chore" data-chore="${t.next.key}" data-task="${esc(t.key)}">${esc(t.next.label)}</button>`, w: urgent ? 1 : 3 });
+  }
+  for (const t of S.tasks.filter((x) => readyToMerge(x.pr))) {
+    items.push({ c: 'emerald', ico: '✓', t: `Prête à merger — ${t.key.startsWith('PR-') ? '' : `${t.key} · `}${t.issue?.summary ?? t.pr.title}`, s: `PR #${t.pr.number} · approuvée, checks verts, sans conflit`, a: `<a class="badge ok" href="${esc(t.pr.url)}" target="_blank">Merger sur GitHub ↗</a>`, w: 0.7 });
   }
   for (const r of S.reviews.filter((x) => x.requested_me && !x.my_review)) {
     items.push({ c: 'sky', ico: '⇄', t: `Review demandée : #${r.number} ${r.title}`, s: `@${r.author} · ${sizeTag(r.size).replace(/<[^>]+>/g, '')} · ${r.additions + r.deletions} lignes`, a: `<button class="brutal" data-review="${r.number}" data-repo="${esc(r.repo)}">⚡ Brutal review</button> <a href="${esc(r.url)}" target="_blank">ouvrir ↗</a>`, w: 2 });
@@ -206,7 +210,7 @@ function renderHome() {
 
 // ---- tasks ---------------------------------------------------------------------
 const TASK_STATES = [
-  ['all', 'Tout'], ['action', 'Action requise', (t) => t.next], ['checks', 'Checks KO', (t) => ['FAILURE', 'ERROR'].includes(t.pr?.checks)],
+  ['all', 'Tout'], ['merge', 'Prêtes à merger', (t) => readyToMerge(t.pr)], ['action', 'Action requise', (t) => t.next && t.next.key !== 'start-task'], ['checks', 'Checks KO', (t) => ['FAILURE', 'ERROR'].includes(t.pr?.checks)],
   ['conflicts', 'Conflits', (t) => t.pr?.mergeable === 'CONFLICTING'], ['comments', 'Commentaires', (t) => t.pr?.unresolved_threads > 0],
   ['draft', 'Draft', (t) => t.pr?.is_draft], ['nopr', 'Sans PR', (t) => !t.pr], ['running', 'Session active', (t) => t.sessions.some((s) => ACTIVE.includes(s.state))],
 ];
@@ -226,7 +230,7 @@ function renderTasks() {
     && textMatch(f.q, t.key, t.issue?.summary, t.pr?.title, t.pr?.head));
   if (!tasks.length) return ($('#r-tasks').innerHTML = `<div class="panel"><div class="empty">${all.length ? 'Aucune tâche ne correspond aux filtres.' : 'Aucune tâche. Configure Jira ou ouvre une PR.'}</div></div>`);
   $('#r-tasks').innerHTML = `<div class="panel"><div class="scroll"><table>
-    <colgroup><col style="width:38px"><col style="width:34%"><col style="width:110px"><col><col style="width:150px"><col style="width:80px"><col style="width:260px"></colgroup>
+    <colgroup><col style="width:38px"><col style="width:34%"><col style="width:110px"><col><col style="width:150px"><col style="width:80px"><col style="width:320px"></colgroup>
     <thead><tr><th class="sel"></th><th>Tâche</th><th>PR</th><th>État</th><th>Dernière session</th><th>Coût est.</th><th style="text-align:right">Next action</th></tr></thead>
     <tbody>${tasks.map((t) => {
       const pr = t.pr, last = t.sessions[0];
@@ -884,10 +888,51 @@ function renderChrome() {
   const parts = [];
   if (S.jira.error && !S.jira.running) parts.push(`⚠ Jira : ${esc(S.jira.error)}`);
   if (sync?.errors.length) parts.push(`⚠ ${sync.errors.map(esc).join(' · ')}`);
+  if (sync?.at && Date.now() - new Date(sync.at) > 15 * 60_000) parts.push(`⚠ Dernier sync GitHub il y a ${ago(sync.at)} — clique « ⟳ Actualiser »`);
   $('#banner').innerHTML = parts.join('<br>');
   const blocked = S.sessions.filter((s) => s.state === 'blocked').length;
   document.title = blocked ? `(${blocked}) Eric's AI Dashboard` : "Eric's AI Dashboard";
 }
+
+// ---- per-page refresh ---------------------------------------------------------------
+// Which sources each page shows (mirrors SCOPES on the server) and how old each one is.
+const PAGE_SOURCES = {
+  home: ['github', 'jira', 'slack'], tasks: ['github', 'jira'], jira: ['jira'], epics: ['jira'], reviews: ['github'], radar: ['github'],
+  brutal: ['github'], slack: ['slack'], sessions: [], usage: ['usage'], stack: [], data: ['usage'],
+};
+const SOURCE_LABEL = { github: 'GitHub', jira: 'Jira', slack: 'Slack', usage: 'Transcripts' };
+const STALE_MS = { github: 10 * 60_000, jira: 45 * 60_000, slack: 60 * 60_000, usage: 15 * 60_000 };
+const sourceAt = (k) => ({ github: S.sync?.at, jira: S.jira?.at, slack: S.slack?.at, usage: U?.scannedAt }[k]);
+function renderFresh() {
+  if (!S) return;
+  const src = PAGE_SOURCES[pageFromHash()] ?? [];
+  $('#pageFresh').innerHTML = src.length ? src.map((k) => { const at = sourceAt(k); const old = !at || Date.now() - new Date(at) > STALE_MS[k];
+    return `<div class="${old ? 'old' : ''}"><b>${SOURCE_LABEL[k]}</b> ${at ? `il y a ${ago(at)}` : 'jamais'}</div>`; }).join('')
+    : '<div><b>Live</b> · mis à jour en continu</div>';
+}
+let refreshing = false;
+async function refreshPage() {
+  if (refreshing) return;
+  refreshing = true;
+  const btn = $('#refreshBtn'), page = pageFromHash();
+  btn.classList.add('spin'); btn.disabled = true; btn.textContent = '⟳ Actualisation…';
+  const slow = (PAGE_SOURCES[page] ?? []).some((k) => k === 'jira' || k === 'slack');
+  if (slow) toast('Jira / Slack passent par Claude : ~30 s à 2 min');
+  try {
+    const { results } = await post('/api/refresh', { scope: page });
+    const r = await fetch('/api/state');
+    if (r.ok) { S = await r.json(); saveState(); }
+    if (page === 'usage') { uCache.clear(); U = null; }
+    render();
+    const ko = Object.entries(results).filter(([, v]) => v !== 'ok');
+    toast(ko.length ? `⚠ ${ko.map(([k, v]) => `${k} : ${v}`).join(' · ')}` : 'À jour ✓');
+  } catch (e) { toast(e.message); } finally {
+    refreshing = false; btn.classList.remove('spin'); btn.disabled = false; btn.textContent = '⟳ Actualiser';
+  }
+}
+$('#refreshBtn').onclick = refreshPage;
+document.addEventListener('keydown', (e) => { if (e.key === 'r' && !e.metaKey && !e.ctrlKey && !e.target.matches('input, textarea, select') && !document.querySelector('dialog[open]')) refreshPage(); });
+setInterval(renderFresh, 15_000);
 
 // Only the page on screen is rendered; the others are marked stale and drawn when opened.
 // A page is skipped when none of the state sections it reads changed.
@@ -915,6 +960,7 @@ function renderCounts() {
 }
 function render(changed) {
   renderChrome();
+  renderFresh();
   renderCounts();
   for (const [page, [, deps]] of Object.entries(PAGE_FN)) if (!changed || deps.some((d) => changed.includes(d))) stale.add(page);
   const page = pageFromHash();

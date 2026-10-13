@@ -113,7 +113,15 @@ async function viaMcp() {
 let running = false;
 
 /** Sync Jira. With no token, the MCP path only runs when `force` or when the last MCP sync is older than mcpEveryMs. */
-export async function syncJira({ force = false } = {}) {
+let inflight = null;
+/** Same call while a sync runs: the caller waits for that one instead of starting another. */
+export function syncJira(opts = {}) {
+  if (inflight) return inflight;
+  inflight = doSyncJira(opts).finally(() => { inflight = null; });
+  return inflight;
+}
+
+async function doSyncJira({ force = false } = {}) {
   if (running) return { skipped: 'already running' };
   const t = await getToken();
   const last = kv.get('jira') ?? {};

@@ -33,7 +33,14 @@ urgent = someone blocked on him / prod incident / direct question waiting > 2h. 
 }
 
 let running = false;
-export async function syncSlack({ force = false, model } = {}) {
+let inflight = null;
+export function syncSlack(opts = {}) {
+  if (inflight) return inflight;
+  inflight = doSyncSlack(opts).finally(() => { inflight = null; });
+  return inflight;
+}
+
+async function doSyncSlack({ force = false, model } = {}) {
   const c = config.slack;
   if (!c.enabled || running) return { skipped: true };
   const last = kv.get('slack') ?? {};

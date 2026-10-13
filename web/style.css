@@ -338,3 +338,10 @@ dialog.palette input { width: 100%; border: 0; border-bottom: 1px solid var(--li
 .pi small { color: var(--faint); font-size: 11.5px; }
 .pi.on, .pi:hover { background: var(--violet-s); }
 .pi.on span { color: var(--violet); }
+
+.fresh { font-size: 11.5px; color: var(--faint); text-align: right; line-height: 1.35; }
+.fresh b { color: var(--muted); font-weight: 600; }
+.fresh .old { color: var(--amber); }
+#refreshBtn.spin::first-letter { display: inline-block; }
+#refreshBtn.spin { color: var(--violet); border-color: var(--violet); }
+@keyframes spin { to { transform: rotate(360deg); } }
