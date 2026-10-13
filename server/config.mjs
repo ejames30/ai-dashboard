@@ -70,6 +70,9 @@ export const config = {
     hours: [8, 20], // Monday–Friday only; outside, "Trier" / ⟳ still works
   },
 
+  // Stand-up written automatically on weekdays at this hour, for the previous working day.
+  standup: { hour: 9 },
+
   syncEveryMs: 3 * 60_000,
   sessionPollMs: 5_000,
 

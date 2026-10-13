@@ -40,6 +40,7 @@ $('#themeBtn').onclick = () => {
 // ---- pages -------------------------------------------------------------------
 const PAGES = {
   home: ["Aujourd'hui", 'Tout ce qui attend une action, au même endroit'],
+  standup: ['Stand-up', 'Écrit tout seul chaque jour de semaine à 9h à partir de ce que tu as vraiment fait — ou à la demande'],
   tasks: ['Tâches', 'Tes PR et tes tickets en cours, avec la prochaine action suggérée'],
   jira: ['Jira', 'Tous les tickets qui te sont assignés'],
   epics: ['Epics & plans', 'Lance un plan sur un epic : Claude lit les tickets et le code, propose un découpage, attend ton go'],
@@ -598,6 +599,54 @@ function renderRadar() {
 setInterval(() => { const el = $('#radarNext'); if (el?.dataset.at) el.textContent = fmtMs(Math.max(0, Number(el.dataset.at) - Date.now())) || '0s'; }, 1000);
 setInterval(pollLiveReviews, 3000);
 
+// ---- stand-up --------------------------------------------------------------------------
+let standupSel = null;
+const dayLabel = (iso) => new Date(iso).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+function renderStandup() {
+  const list = S.standups ?? [];
+  const pending = list.find((x) => x.pending);
+  const cur = list.find((x) => x.id === standupSel) ?? list.find((x) => x.result) ?? null;
+  $('#standupDot').className = `dot ${pending ? 'live' : list[0]?.day === new Date().toISOString().slice(0, 10) && list[0]?.result ? 'ok' : ''}`;
+  const r = cur?.result, f = cur?.facts;
+  const commits = f ? f.pushed.reduce((n, p) => n + p.commits.length, 0) : 0;
+  const sect = (title, ico, cls, items, empty) => `<div class="su-sect ${cls}"><h3><span>${ico}</span>${title}</h3>${items?.length ? `<ul>${items.map((i) => `<li class="md">${md(i)}</li>`).join('')}</ul>` : `<div class="faint">${empty}</div>`}</div>`;
+  $('#page-standup').innerHTML = `
+    <div class="hero su-hero">
+      <div class="su-date"><small>${cur ? `${dayLabel(cur.since)}${new Date(cur.until) - new Date(cur.since) > 86_400_000 ? ` → ${dayLabel(new Date(new Date(cur.until) - 1))}` : ''}` : 'Pas encore de stand-up'}</small>
+        <h2>${r ? esc(r.headline) : pending ? 'J’écris ton stand-up…' : 'Ton stand-up de ce matin'}</h2>
+        <p>${cur ? `${cur.auto ? '⏰ généré automatiquement' : '✍ généré à la demande'} à ${new Date(cur.generated_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} · ${esc(cur.model)}${cur.cost ? ` · $${cur.cost.toFixed(3)}` : ''}` : 'Généré automatiquement chaque jour de semaine à 9h — ou maintenant.'}</p></div>
+      <span class="spacer"></span>
+      <div class="row-actions">${r ? '<button class="primary" id="standupCopy">⧉ Copier pour Slack</button>' : ''}
+        <button id="standupGen" ${pending ? 'disabled' : ''}>${pending ? '<span class="dot live"></span> écriture…' : '↻ Générer maintenant'}</button>
+        <button class="ghost" id="standupGenOpus" ${pending ? 'disabled' : ''} title="Même chose avec Opus">Opus</button></div>
+    </div>
+    ${cur?.error ? `<div class="panel"><div class="empty" style="color:var(--rose)">✗ ${esc(cur.error)}</div></div>` : ''}
+    ${f ? `<div class="kpis">
+      <div class="kpi emerald"><b>${f.merged.length}</b><small>PR mergées</small></div>
+      <div class="kpi violet"><b>${f.opened.length}</b><small>PR ouvertes</small></div>
+      <div class="kpi sky"><b>${commits}</b><small>commits poussés</small></div>
+      <div class="kpi pink"><b>${f.reviewed.length + f.brutal.length}</b><small>reviews données</small></div>
+      <div class="kpi amber"><b>${f.jira.length}</b><small>tickets bougés</small></div>
+      <div class="kpi"><b>${f.sessions.length}</b><small>sessions Claude</small></div></div>` : ''}
+    ${r ? `<div class="su-grid">
+      ${sect('Hier', '✓', 'done', r.yesterday, 'Rien de notable sur la période.')}
+      ${sect("Aujourd'hui", '→', 'next', r.today, 'Rien de planifié.')}
+      ${sect('Blocages', '⛔', 'block', r.blockers, 'Aucun blocage 🎉')}
+    </div>
+    <div class="grid2">
+      <div class="panel"><h2>Prêt à coller dans Slack</h2><pre class="log su-slack">${esc(r.slack)}</pre></div>
+      <div class="panel"><h2>Les faits utilisés</h2><div class="su-facts">
+        ${f.merged.map((p) => `<a class="badge ok" href="${esc(p.url)}" target="_blank">✓ #${p.number} mergée</a>`).join('')}
+        ${f.opened.map((p) => `<a class="badge ai" href="${esc(p.url)}" target="_blank">＋ #${p.number} ouverte</a>`).join('')}
+        ${f.pushed.map((p) => `<a class="badge info" href="${esc(p.url)}" target="_blank">↑ #${p.number} · ${p.commits.length} commit${p.commits.length > 1 ? 's' : ''}</a>`).join('')}
+        ${f.reviewed.map((p) => `<a class="badge pink" href="${esc(p.url)}" target="_blank">⇄ review #${p.number} (@${esc(p.author)})</a>`).join('')}
+        ${f.jira.map((i) => `<a class="badge warn" href="${esc(i.url)}" target="_blank">◆ ${esc(i.key)} · ${esc(i.status)}</a>`).join('')}
+        ${!f.merged.length && !f.opened.length && !f.pushed.length && !f.reviewed.length && !f.jira.length ? '<span class="faint">Aucune activité trouvée sur la période.</span>' : ''}
+      </div></div>
+    </div>` : ''}
+    ${list.length > 1 ? `<div class="panel"><h2>Historique</h2><div class="su-hist">${list.filter((x) => x.result || x.error).map((x) => `<button data-standup="${x.id}" class="${cur?.id === x.id ? 'on' : ''}"><b>${new Date(x.generated_at).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })}</b><small>${x.auto ? 'auto' : 'manuel'}</small></button>`).join('')}</div></div>` : ''}`;
+}
+
 // ---- slack ------------------------------------------------------------------------------
 const PRIO = { urgent: ['rose', '🔥 Urgent'], important: ['amber', '★ Important'], fyi: ['sky', 'ℹ︎ Pour info'] };
 const KIND = { dm: 'DM', mention: 'Mention', thread: 'Thread', team: 'Équipe', incident: 'Incident' };
@@ -898,7 +947,7 @@ function renderChrome() {
 // ---- per-page refresh ---------------------------------------------------------------
 // Which sources each page shows (mirrors SCOPES on the server) and how old each one is.
 const PAGE_SOURCES = {
-  home: ['github', 'jira', 'slack'], tasks: ['github', 'jira'], jira: ['jira'], epics: ['jira'], reviews: ['github'], radar: ['github'],
+  standup: ['github', 'jira'], home: ['github', 'jira', 'slack'], tasks: ['github', 'jira'], jira: ['jira'], epics: ['jira'], reviews: ['github'], radar: ['github'],
   brutal: ['github'], slack: ['slack'], sessions: [], usage: ['usage'], stack: [], data: ['usage'],
 };
 const SOURCE_LABEL = { github: 'GitHub', jira: 'Jira', slack: 'Slack', usage: 'Transcripts' };
@@ -938,6 +987,7 @@ setInterval(renderFresh, 15_000);
 // Only the page on screen is rendered; the others are marked stale and drawn when opened.
 // A page is skipped when none of the state sections it reads changed.
 const PAGE_FN = {
+  standup: [() => renderStandup(), ['standups']],
   home: [() => renderHome(), ['sessions', 'tasks', 'reviews', 'reviewHistory', 'slack']],
   tasks: [() => renderTasks(), ['tasks', 'chores']], jira: [() => renderJira(), ['tasks', 'jira']], epics: [() => renderEpics(), ['epics']],
   reviews: [() => renderReviews(), ['reviews', 'autoReview', 'team']], radar: [() => renderRadar(), ['autoReview', 'sessions', 'reviewHistory', 'events']],
@@ -1028,7 +1078,10 @@ document.addEventListener('click', async (e) => {
     if (b.dataset.stackPr) { await post('/api/stack/switch', { pr: b.dataset.stackPr }); location.hash = 'stack'; return; }
     if (b.id === 'customBtn') return openChore({ kind: 'custom', chore: 'custom' });
     if (b.id === 'radarCheck') return refreshPage();
-    if (b.id === 'standupBtn') return openChore({ kind: 'custom', chore: 'standup' });
+    if (b.id === 'standupBtn') { location.hash = 'standup'; return; }
+    if (b.id === 'standupGen' || b.id === 'standupGenOpus') { await post('/api/standup', b.id === 'standupGenOpus' ? { model: 'opus' } : {}); return toast('Stand-up en cours d’écriture (~30 s)'); }
+    if (b.dataset.standup) { standupSel = Number(b.dataset.standup); return renderStandup(); }
+    if (b.id === 'standupCopy') { const s = (S.standups ?? []).find((x) => x.id === standupSel) ?? S.standups?.find((x) => x.result); await navigator.clipboard.writeText(s?.result?.slack ?? ''); return toast('Copié — colle-le dans Slack ✓'); }
     if (b.id === 'slackSync' || b.id === 'slackDeep') { await post('/api/slack/sync', b.id === 'slackDeep' ? { model: 'sonnet' } : {}); return toast('Tri Slack lancé (≈ 1-2 min)'); }
     if (b.dataset.slack) { await post(`/api/slack/${encodeURIComponent(b.dataset.slack)}/status`, { status: b.dataset.st }); return; }
     if (b.id === 'syncBtn') { b.disabled = true; await post('/api/sync').finally(() => (b.disabled = false)); return toast('GitHub synchronisé · Jira en cours'); }

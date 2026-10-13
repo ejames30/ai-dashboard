@@ -13,6 +13,7 @@ import { db, kv, logEvent, update, version } from './db.mjs';
 import { autoReviewState, runAutoReview } from './autoreview.mjs';
 import { syncGithub } from './github.mjs';
 import { setSlackStatus, slackItems, syncSlack } from './slack.mjs';
+import { generateStandup, listStandups, standupTick } from './standup.mjs';
 import { scanUsage, usageStats } from './usage.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { jiraSource, resetJiraToken, syncJira } from './jira.mjs';
@@ -134,6 +135,7 @@ async function state() {
     events: cached('events', ['events'], () => db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT 150').all()),
     slack: cached('slack', ['slack', 'kv:slack'], () => ({ ...(kv.get('slack') ?? {}), enabled: config.slack.enabled, model: config.slack.model, items: slackItems() })),
     db: cached('db', TABLES, () => ({ path: join(config.dataDir, 'ai-dashboard.db'), tables: Object.fromEntries(TABLES.map((t) => [t, db.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n])) })),
+    standups: cached('standups', ['standups'], listStandups),
     chores: CHORE_LIST,
     models: MODELS,
     efforts: EFFORTS,
@@ -236,6 +238,7 @@ setInterval(pushState, 15_000); // stack status, relative times
 const usageTick = () => scanUsage().then((n) => { kv.set('usageScannedAt', new Date().toISOString()); if (n) pushState(); }).catch((e) => console.error('usage', e.message));
 setInterval(usageTick, 5 * 60_000);
 usageTick();
+setInterval(() => standupTick()?.finally(pushState), 60_000);
 sync();
 
 // Read-only connection for the SQL console: it can't write, whatever the query says.
@@ -368,6 +371,7 @@ createServer(async (req, res) => {
         const rows = ro.prepare(q).all().slice(0, 1000);
         return json(res, 200, { rows });
       }
+      if (pathname === '/api/standup') { generateStandup({ model: body.model === 'opus' ? 'opus' : 'sonnet' }).finally(pushState); pushState(); return json(res, 202, { ok: true }); }
       if (pathname === '/api/refresh') return json(res, 200, { results: await refresh(String(body.scope ?? '')) });
       if (pathname === '/api/sync') { resetJiraToken(); await sync({ force: true }); return json(res, 200, { ok: true }); }
       if (pathname === '/api/sessions') { const id = await startSession(body); pushState(); return json(res, 200, { id }); }

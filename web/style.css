@@ -345,3 +345,26 @@ dialog.palette input { width: 100%; border: 0; border-bottom: 1px solid var(--li
 #refreshBtn.spin::first-letter { display: inline-block; }
 #refreshBtn.spin { color: var(--violet); border-color: var(--violet); }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* stand-up */
+.su-hero { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.su-date small { text-transform: capitalize; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+.su-hero h2 { font-size: 22px; margin: 4px 0; max-width: 820px; }
+.su-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 16px; }
+.su-sect { padding: 18px 20px; border-radius: var(--r); background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow); position: relative; overflow: hidden; }
+.su-sect::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--c); }
+.su-sect.done { --c: var(--emerald); --c-s: var(--emerald-s); } .su-sect.next { --c: var(--violet); --c-s: var(--violet-s); } .su-sect.block { --c: var(--rose); --c-s: var(--rose-s); }
+.su-sect h3 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--c); display: flex; gap: 8px; align-items: center; }
+.su-sect h3 span { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: var(--c-s); }
+.su-sect ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.su-sect li { padding-left: 14px; position: relative; font-size: 13.5px; }
+.su-sect li::before { content: ""; position: absolute; left: 0; top: .62em; width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
+.su-sect li p { margin: 0; }
+.su-slack { max-height: 340px; white-space: pre-wrap; font-size: 12.5px; }
+.su-facts { display: flex; flex-wrap: wrap; gap: 6px; padding: 14px 16px; }
+.su-facts a { text-decoration: none; }
+.su-hist { display: flex; gap: 8px; padding: 12px 16px; flex-wrap: wrap; }
+.su-hist button { display: flex; flex-direction: column; align-items: flex-start; gap: 0; padding: 6px 12px; }
+.su-hist button.on { border-color: var(--violet); background: var(--violet-s); }
+.su-hist small { color: var(--muted); font-size: 11px; }
+@media (max-width: 1100px) { .su-grid { grid-template-columns: 1fr; } }
