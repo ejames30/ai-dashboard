@@ -110,7 +110,7 @@ in the brutal-review output format, with file:line references. Start with a one-
 
   RESULT=$(jq -c 'select(.type=="result")' "$STREAM" 2>/dev/null | tail -1)
   REVIEW=$(print -r -- "$RESULT" | jq -r '.result // empty' 2>/dev/null)
-  IS_ERR=$(print -r -- "$RESULT" | jq -r '.is_error // true' 2>/dev/null)
+  IS_ERR=$(print -r -- "$RESULT" | jq -r 'if .is_error == false then "false" else "true" end' 2>/dev/null)
   emit review_done --arg id "$RID" --arg pr "$PR" --argjson rc "$RC" \
     --argjson cost "$(print -r -- "$RESULT" | jq '.total_cost_usd // 0' 2>/dev/null || echo 0)" \
     --argjson duration_ms "$(print -r -- "$RESULT" | jq '.duration_ms // 0' 2>/dev/null || echo 0)" \
