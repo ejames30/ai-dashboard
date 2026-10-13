@@ -566,10 +566,11 @@ function renderRadar() {
   const posted = S.reviewHistory.filter((r) => r.chore === 'auto-review');
   const events = S.events.filter((e) => /^(auto|review)/.test(e.kind));
   $('#page-radar').innerHTML = `
-    <div class="hero radar"><div class="radar-ring ${a.enabled ? 'on' : ''}"><span></span></div>
-      <div><h2>${a.enabled ? 'Radar actif' : 'Radar coupé'} ${live.length ? `· <span style="color:var(--violet)">${live.length} review${live.length > 1 ? 's' : ''} en cours</span>` : ''}</h2>
+    <div class="hero radar"><div class="radar-ring ${a.enabled && a.active ? 'on' : ''}"><span></span></div>
+      <div><h2>${!a.enabled ? 'Radar coupé' : a.active ? 'Radar actif' : `Radar en pause · reprend à ${a.hours[0]}h`} ${live.length ? `· <span style="color:var(--violet)">${live.length} review${live.length > 1 ? 's' : ''} en cours</span>` : ''}</h2>
       <p>Surveille ${a.authors.map((x) => `<b>${esc(S.team.find((m) => m.login === x)?.name ?? x)}</b>`).join(', ')} sur hivebrite-mobile · check toutes les ${Math.round(a.everyMs / 60000)} min · ${a.maxConcurrent} en parallèle max</p>
-      <p class="small">Dernier check ${a.lastCheck ? `il y a ${ago(a.lastCheck)}` : '—'} · prochain dans <b id="radarNext" data-at="${a.lastCheck ? new Date(a.lastCheck).getTime() + a.everyMs : ''}">${next != null ? fmtMs(next) : '—'}</b> · actif depuis ${a.since ? new Date(a.since).toLocaleString('fr-FR') : '—'}</p></div></div>
+      <p class="small">Automatique de ${a.hours[0]}h à ${a.hours[1]}h · dernier check ${a.lastCheck ? `il y a ${ago(a.lastCheck)}` : '—'} · ${a.active ? `prochain dans <b id="radarNext" data-at="${a.lastCheck ? new Date(a.lastCheck).getTime() + a.everyMs : ''}">${next != null ? fmtMs(next) : '—'}</b>` : '<b>en pause</b> — check manuel possible'}</p></div>
+      <span class="spacer"></span><button class="primary" id="radarCheck">◉ Checker maintenant</button></div>
     <div class="kpis">
       <div class="kpi violet"><b>${a.watched.length}</b><small>PR surveillées</small></div>
       <div class="kpi pink"><b>${posted.length}</b><small>reviews postées</small></div>
@@ -1026,6 +1027,7 @@ document.addEventListener('click', async (e) => {
     if (b.dataset.stackBranch) { await post('/api/stack/switch', { branch: b.dataset.stackBranch }); location.hash = 'stack'; return; }
     if (b.dataset.stackPr) { await post('/api/stack/switch', { pr: b.dataset.stackPr }); location.hash = 'stack'; return; }
     if (b.id === 'customBtn') return openChore({ kind: 'custom', chore: 'custom' });
+    if (b.id === 'radarCheck') return refreshPage();
     if (b.id === 'standupBtn') return openChore({ kind: 'custom', chore: 'standup' });
     if (b.id === 'slackSync' || b.id === 'slackDeep') { await post('/api/slack/sync', b.id === 'slackDeep' ? { model: 'sonnet' } : {}); return toast('Tri Slack lancé (≈ 1-2 min)'); }
     if (b.dataset.slack) { await post(`/api/slack/${encodeURIComponent(b.dataset.slack)}/status`, { status: b.dataset.st }); return; }

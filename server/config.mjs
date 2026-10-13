@@ -54,6 +54,7 @@ export const config = {
     enabled: true,
     authors: ['malekhassani', 'MarshMallowFR', 'tobiasz'],
     maxConcurrent: 3,
+    hours: [8, 20], // automatic checks only from 8:00 to 20:00; outside, a manual check still works
   },
 
   // Slack triage through the claude.ai connector (read-only tools). Work hours only.

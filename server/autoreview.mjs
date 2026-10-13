@@ -29,15 +29,17 @@ export function autoReviewState() {
     return { repo: pr.repo, number: pr.number, title: pr.title, author: pr.author, url: pr.url, size: pr.additions + pr.deletions, is_draft: pr.is_draft, status, session, outdated: !!(session?.head_sha && session.head_sha !== pr.head_sha) };
   });
   return {
-    enabled: a.enabled, authors: a.authors, maxConcurrent: a.maxConcurrent, everyMs: config.syncEveryMs,
+    enabled: a.enabled, authors: a.authors, maxConcurrent: a.maxConcurrent, everyMs: config.syncEveryMs, hours: a.hours, active: inHours(),
     since: s.since ?? null, lastCheck: s.lastCheck ?? null, reviewed: sessions.length, watched,
   };
 }
 
-/** Launch review sessions for new PRs. `start(pr)` launches one and resolves when it's started. */
-export async function runAutoReview(start) {
+const inHours = () => { const h = new Date().getHours(); return h >= config.autoReview.hours[0] && h < config.autoReview.hours[1]; };
+
+/** Launch review sessions for new PRs. `start(pr)` launches one and resolves when it's started. `force` = manual check. */
+export async function runAutoReview(start, { force = false } = {}) {
   const a = config.autoReview;
-  if (!a.enabled) return [];
+  if (!a.enabled || (!force && !inHours())) return [];
   // Drafts too, so the radar shows them; they're only reviewed once ready.
   const prs = watchedPrs().filter((pr) => !pr.is_draft);
   let s = kv.get('autoReview');
@@ -54,9 +56,9 @@ export async function runAutoReview(start) {
   const todo = fresh.slice(0, Math.max(0, a.maxConcurrent - running));
   s = { ...s, lastCheck: new Date().toISOString() };
   kv.set('autoReview', s);
-  logEvent('auto-check', fresh.length
+  logEvent('auto-check', (force ? 'Check manuel · ' : '') + (fresh.length
     ? `${prs.length} PR surveillées · ${fresh.length} nouvelle(s) · ${todo.length} lancée(s)${fresh.length > todo.length ? ` · ${fresh.length - todo.length} en file (max ${a.maxConcurrent} en parallèle)` : ''}`
-    : `${prs.length} PR surveillées · rien de nouveau`);
+    : `${prs.length} PR surveillées · rien de nouveau`));
   const started = [];
   for (const pr of todo) {
     done.add(key(pr)); // before launching: a crash mid-launch must not loop on the same PR

@@ -167,11 +167,12 @@ onStackLog((line) => broadcast('stacklog', line));
 // ---- sync loops --------------------------------------------------------------
 // GitHub + the auto-review check; concurrent callers share the run in flight.
 let ghFlight = null;
-function githubNow() {
+function githubNow({ forceRadar = false } = {}) {
+  if (ghFlight && forceRadar) return ghFlight.finally(() => githubNow({ forceRadar }));
   ghFlight ??= (async () => {
     const errors = [];
     await syncGithub().catch((e) => errors.push(`GitHub: ${e.message}`));
-    await runAutoReview(startAutoReview)
+    await runAutoReview(startAutoReview, { force: forceRadar })
       .then((n) => n.length && console.log(`auto-review started for #${n.join(', #')}`))
       .catch((e) => errors.push(`Auto-review: ${e.message}`));
     kv.set('sync', { at: new Date().toISOString(), errors });
@@ -194,13 +195,14 @@ const SOURCES = {
   github: () => githubNow(),
   jira: () => syncJira({ force: true }),
   slack: () => syncSlack({ force: true }),
+  radar: () => githubNow({ forceRadar: true }),
   sessions: () => pollSessions(onReviewDone),
   usage: () => scanUsage().then(() => kv.set('usageScannedAt', new Date().toISOString())),
   stack: async () => {},
 };
 const SCOPES = {
   home: ['github', 'jira', 'slack', 'sessions'], tasks: ['github', 'jira', 'sessions'], jira: ['jira'], epics: ['jira', 'sessions'],
-  reviews: ['github', 'sessions'], radar: ['github', 'sessions'], brutal: ['github', 'sessions'], slack: ['slack'],
+  reviews: ['github', 'sessions'], radar: ['radar', 'sessions'], brutal: ['github', 'sessions'], slack: ['slack'],
   sessions: ['sessions'], usage: ['usage'], stack: ['stack'], data: ['usage'],
 };
 async function refresh(scope) {
