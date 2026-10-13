@@ -1,5 +1,5 @@
 import { config } from './config.mjs';
-import { db, upsert } from './db.mjs';
+import { bump, db, upsert } from './db.mjs';
 import { ghGraphql } from './sh.mjs';
 
 const PR_FIELDS = `
@@ -73,6 +73,7 @@ export async function syncGithub() {
       if (!open.has(number)) db.prepare('UPDATE prs SET closed_at = ? WHERE repo = ? AND number = ?').run(now, slug, number);
     }
     rows.forEach((r) => upsert('prs', { ...r, closed_at: null }));
+    bump('prs');
     db.exec('COMMIT');
   }
 }

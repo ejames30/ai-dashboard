@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { config } from './config.mjs';
-import { db, kv, upsert } from './db.mjs';
+import { bump, db, kv, upsert } from './db.mjs';
 import { sh } from './sh.mjs';
 
 // Two ways to read my Jira issues:
@@ -143,6 +143,7 @@ export async function syncJira({ force = false } = {}) {
       });
     }
     db.exec('COMMIT');
+    bump('issues'); bump('epics');
     kv.set('jira', { at: now, source: t ? 'token' : 'mcp', count: issues.length, epics: epics.length, cost, error: null, running: false });
     return { count: issues.length };
   } catch (e) {

@@ -1,5 +1,5 @@
 import { config } from './config.mjs';
-import { db, kv, logEvent, upsert } from './db.mjs';
+import { bump, db, kv, logEvent, upsert } from './db.mjs';
 import { sh } from './sh.mjs';
 
 // Slack, minus the noise: a headless Claude reads my DMs, mentions, threads and team
@@ -81,4 +81,4 @@ export async function syncSlack({ force = false, model } = {}) {
 
 export const slackItems = () => db.prepare("SELECT * FROM slack WHERE ts >= ? ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'important' THEN 1 ELSE 2 END, ts DESC")
   .all(new Date(Date.now() - 7 * 86_400_000).toISOString());
-export const setSlackStatus = (id, status) => db.prepare('UPDATE slack SET status = ? WHERE id = ?').run(status, id);
+export const setSlackStatus = (id, status) => { db.prepare('UPDATE slack SET status = ? WHERE id = ?').run(status, id); bump('slack'); };

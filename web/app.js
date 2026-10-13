@@ -60,7 +60,7 @@ function showPage(name) {
   $('#pageSub').textContent = PAGES[name][1];
 }
 document.querySelectorAll('#nav a').forEach((a) => (a.onclick = () => { location.hash = a.dataset.page; }));
-window.addEventListener('hashchange', () => { showPage(pageFromHash()); if (S && pageFromHash() === 'usage') RENDER.usage(); });
+window.addEventListener('hashchange', () => { showPage(pageFromHash()); if (S) render([]); });
 showPage(pageFromHash());
 
 // ---- filter bars -------------------------------------------------------------
@@ -633,12 +633,19 @@ RENDER.slack = renderSlack;
 // ---- usage / conso IA ------------------------------------------------------------------
 const MODEL_COLOR = { opus: 'var(--violet)', fable: 'var(--pink)', sonnet: 'var(--sky)', haiku: 'var(--emerald)' };
 let U = null, uKey = '';
+const uCache = new Map(); // query → stats, reused until the server says the data moved
 async function loadUsage(force) {
-  const q = new URLSearchParams({ days: chip('usage', 'days', '30'), model: sel('usage', 'model'), project: sel('usage', 'project') });
-  if (!force && q.toString() === uKey && U) return;
-  uKey = q.toString();
+  const q = new URLSearchParams({ days: chip('usage', 'days', '30'), model: sel('usage', 'model'), project: sel('usage', 'project') }).toString();
+  if (!force && q === uKey && U) return;
+  if (!force && uCache.has(q)) { uKey = q; U = uCache.get(q); return renderUsage(); }
+  uKey = q;
   const r = await fetch(`/api/usage?${q}`);
-  if (r.ok) { U = await r.json(); renderUsage(); }
+  if (!r.ok) return;
+  const data = await r.json();
+  if (force && data.version === U?.version && uKey === q) return; // nothing new since last fetch
+  if (data.version !== U?.version) uCache.clear();
+  uCache.set(q, data);
+  if (uKey === q) { U = data; renderUsage(); }
 }
 function renderUsage() {
   filterBar('usage', {
@@ -649,7 +656,8 @@ function renderUsage() {
     ],
     extra: `<span class="faint small">${U?.scannedAt ? `transcripts scannés il y a ${ago(U.scannedAt)}` : 'scan en cours…'}</span>`,
   });
-  if (!U || uKey !== new URLSearchParams({ days: chip('usage', 'days', '30'), model: sel('usage', 'model'), project: sel('usage', 'project') }).toString()) { loadUsage(); if (!U) return ($('#r-usage').innerHTML = '<div class="panel"><div class="empty">Chargement…</div></div>'); }
+  const want = new URLSearchParams({ days: chip('usage', 'days', '30'), model: sel('usage', 'model'), project: sel('usage', 'project') }).toString();
+  if (!U || uKey !== want) { loadUsage(); if (!U) return ($('#r-usage').innerHTML = '<div class="panel"><div class="empty">Chargement…</div></div>'); if (uKey !== want) return; }
   const t = U.total;
   const hit = t.cache_read / Math.max(1, t.input + t.cache_read + t.cache_write);
   const days = [...new Set(U.perDay.map((d) => d.day))].sort();
@@ -881,11 +889,38 @@ function renderChrome() {
   document.title = blocked ? `(${blocked}) Eric's AI Dashboard` : "Eric's AI Dashboard";
 }
 
-function render() {
+// Only the page on screen is rendered; the others are marked stale and drawn when opened.
+// A page is skipped when none of the state sections it reads changed.
+const PAGE_FN = {
+  home: [() => renderHome(), ['sessions', 'tasks', 'reviews', 'reviewHistory', 'slack']],
+  tasks: [() => renderTasks(), ['tasks', 'chores']], jira: [() => renderJira(), ['tasks', 'jira']], epics: [() => renderEpics(), ['epics']],
+  reviews: [() => renderReviews(), ['reviews', 'autoReview', 'team']], radar: [() => renderRadar(), ['autoReview', 'sessions', 'reviewHistory', 'events']],
+  brutal: [() => renderBrutal(), ['reviewHistory']], slack: [() => renderSlack(), ['slack']], sessions: [() => renderSessions(), ['sessions']],
+  usage: [() => RENDER.usage(), []], stack: [() => renderStack(), ['stack', 'tasks', 'reviews']], data: [() => renderData(), ['events', 'db']],
+};
+const stale = new Set(Object.keys(PAGE_FN));
+function renderCounts() {
+  const n = (id, v) => { const el = $(id); if (el && el.textContent !== String(v || '')) el.textContent = v || ''; };
+  n('#c-tasks', S.tasks.filter((t) => t.pr || t.issue?.status_category === 'indeterminate' || t.sessions.length).length);
+  n('#c-jira', S.tasks.filter((t) => t.issue).length);
+  n('#c-epics', (S.epics ?? []).filter((e) => e.plans.some((p) => ACTIVE.includes(p.state))).length);
+  n('#c-reviews', S.reviews.filter((r) => r.team && !r.my_review && !r.session && !r.is_draft).length);
+  n('#c-brutal', (S.reviewHistory ?? []).filter((r) => new Date(r.started_at) >= startOfDay()).length);
+  n('#c-slack', (S.slack?.items ?? []).filter((i) => i.status === 'new' && i.priority !== 'fyi').length);
+  n('#c-sessions', S.sessions.filter((x) => ACTIVE.includes(x.state)).length);
+  n('#c-home', actionItems().filter((i) => i.w <= 1).length);
+  const live = S.sessions.filter((x) => x.chore === 'auto-review' && ACTIVE.includes(x.state));
+  $('#radarDot').className = `dot ${live.length ? 'live' : S.autoReview?.enabled ? 'ok' : ''}`;
+  if (S.stack) $('#stackDot').className = `dot ${S.stack.busy ? 'warn' : S.stack.running ? 'ok' : ''}`;
+}
+function render(changed) {
   renderChrome();
-  for (const fn of [renderHome, renderTasks, renderJira, renderEpics, renderReviews, renderRadar, renderBrutal, renderSlack, renderSessions, renderStack, renderData, ...(pageFromHash() === 'usage' ? [RENDER.usage] : [])]) {
-    try { fn(); } catch (e) { console.error(fn.name, e); }
-  }
+  renderCounts();
+  for (const [page, [, deps]] of Object.entries(PAGE_FN)) if (!changed || deps.some((d) => changed.includes(d))) stale.add(page);
+  const page = pageFromHash();
+  if (!stale.has(page)) return;
+  stale.delete(page);
+  try { PAGE_FN[page][0](); } catch (e) { console.error(page, e); }
 }
 
 // ---- chore modal ---------------------------------------------------------------------
@@ -972,19 +1007,41 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---- live --------------------------------------------------------------------------
+// Last state kept in the browser: a reload paints instantly, then the stream catches up.
+let saveTimer;
+const saveState = () => { clearTimeout(saveTimer); saveTimer = setTimeout(() => store.set('lastState', S), 3000); };
+let pendingChanged = null;
+function apply(changed) {
+  if (document.activeElement?.matches('textarea') || document.activeElement?.closest('tbody select')) {
+    pendingChanged = [...(pendingChanged ?? []), ...changed]; renderChrome(); renderCounts(); return;
+  }
+  render(changed);
+}
+document.addEventListener('focusout', () => { if (pendingChanged) { const c = pendingChanged; pendingChanged = null; setTimeout(() => render(c), 0); } });
 function connect() {
   const es = new EventSource('/live');
   es.addEventListener('state', (e) => {
     S = JSON.parse(e.data);
     if (!stackLog.length && S.stack?.log) stackLog = S.stack.log;
-    if (document.activeElement?.matches('textarea') || document.activeElement?.closest('tbody select')) { renderChrome(); return; }
-    render();
+    saveState();
+    apply(Object.keys(S));
+  });
+  es.addEventListener('patch', (e) => {
+    const p = JSON.parse(e.data);
+    Object.assign(S, p);
+    saveState();
+    apply(Object.keys(p));
   });
   es.addEventListener('stacklog', (e) => { stackLog.push(JSON.parse(e.data)); if (stackLog.length > 400) stackLog = stackLog.slice(-400); renderStackLog(); });
   es.onerror = () => { $('#syncInfo').textContent = 'déconnecté du serveur…'; };
 }
 // ?snapshot: one fetch, no live stream (headless screenshots never settle on an open SSE).
 if (new URLSearchParams(location.search).has('snapshot')) fetch('/api/state').then((r) => r.json()).then((d) => { S = d; stackLog = d.stack?.log ?? []; render(); });
-else connect();
-setInterval(() => S && !document.activeElement?.matches('select, textarea, input') && (renderHome(), renderSessions()), 30_000);
+else {
+  const cachedState = store.get('lastState', null);
+  if (cachedState?.tasks) { S = cachedState; render(); }
+  connect();
+}
+// Relative times ("il y a 3 min") on the visible page.
+setInterval(() => { if (S && !document.activeElement?.matches('select, textarea, input') && ['home', 'sessions'].includes(pageFromHash())) { stale.add(pageFromHash()); render([]); } }, 30_000);
 setInterval(() => S && pageFromHash() === 'usage' && loadUsage(true), 60_000);

@@ -9,24 +9,23 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AUTO_REVIEW_CHORE, BATCH, CHORES, CUSTOM, EFFORTS, EPIC_PLAN, MODELS, REVIEW_CHORE, STANDUP, choreByKey, nextChore } from './chores.mjs';
 import { config, repoBySlug, sizeOf } from './config.mjs';
-import { db, kv, logEvent, update } from './db.mjs';
+import { db, kv, logEvent, update, version } from './db.mjs';
 import { autoReviewState, runAutoReview } from './autoreview.mjs';
 import { syncGithub } from './github.mjs';
 import { setSlackStatus, slackItems, syncSlack } from './slack.mjs';
 import { scanUsage, usageStats } from './usage.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { jiraSource, resetJiraToken, syncJira } from './jira.mjs';
-import { PLAN_TOOLS, launch, listSessions, openInTerminal, pollSessions, postDraftReview, replySession, reviewFromTranscript, stopSession, transcript } from './sessions.mjs';
+import { PLAN_TOOLS, launch, listSessions, slim, openInTerminal, pollSessions, postDraftReview, replySession, reviewFromTranscript, stopSession, transcript } from './sessions.mjs';
 import { onStackLog, refreshStack, stackStatus, startStack, stopStack, switchStack } from './stack.mjs';
 import { reviewWorktree, scratchWorktree, taskWorktree } from './worktrees.mjs';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '../web');
 
 // ---- model -----------------------------------------------------------------
-function buildTasks() {
+function buildTasks(sessions = listSessions()) {
   const issues = db.prepare('SELECT * FROM issues').all();
   const mine = db.prepare("SELECT * FROM prs WHERE kind = 'mine' AND closed_at IS NULL").all();
-  const sessions = listSessions();
   const tasks = new Map();
   for (const issue of issues) tasks.set(issue.key, { key: issue.key, issue, pr: null });
   for (const pr of mine) {
@@ -37,8 +36,10 @@ function buildTasks() {
   }
   // A multi-ticket session counts for each of its tickets, its cost split evenly between them.
   const keysOf = (s) => { try { return s.tasks ? JSON.parse(s.tasks) : s.task ? [s.task] : []; } catch { return []; } };
+  const byKey = new Map();
+  for (const s of sessions) for (const k of keysOf(s)) byKey.set(k, [...(byKey.get(k) ?? []), s]);
   return [...tasks.values()].map((t) => {
-    const own = sessions.filter((s) => keysOf(s).includes(t.key));
+    const own = byKey.get(t.key) ?? [];
     const cost = own.reduce((a, s) => a + (s.cost_usd ?? 0) / Math.max(1, keysOf(s).length), 0);
     t.doneChores = new Set(own.filter((s) => s.state === 'done').map((s) => s.chore));
     const next = nextChore(t);
@@ -46,7 +47,7 @@ function buildTasks() {
     return {
       key: t.key, issue: t.issue, pr: t.pr, size: t.pr ? sizeOf(lines) : null, lines,
       next: next && { key: next.key, label: next.label },
-      sessions: own.slice(0, 5), sessionCount: own.length, cost,
+      sessions: own.slice(0, 3).map(slim), sessionCount: own.length, cost,
     };
   }).sort((a, b) => (b.pr?.updated ?? b.issue?.updated ?? '').localeCompare(a.pr?.updated ?? a.issue?.updated ?? ''));
 }
@@ -55,9 +56,9 @@ const REVIEW_KINDS = ['ai-review', 'auto-review', 'self-review'];
 const parseReview = (s) => { try { return s.review_json ? JSON.parse(s.review_json) : null; } catch { return null; } };
 
 /** Every review session, newest first, with its verdict counts: the Brutal reviews page. */
-function buildReviewHistory() {
+function buildReviewHistory(sessions = listSessions()) {
   const prs = db.prepare('SELECT * FROM prs').all();
-  return listSessions().filter((s) => REVIEW_KINDS.includes(s.chore)).map((s) => {
+  return sessions.filter((s) => REVIEW_KINDS.includes(s.chore)).map((s) => {
     const r = parseReview(s);
     const count = (sev) => (r?.comments ?? []).filter((c) => c.severity === sev).length;
     const pr = prs.find((p) => p.repo === s.repo && p.number === s.pr) ?? null;
@@ -72,8 +73,8 @@ function buildReviewHistory() {
   });
 }
 
-function buildReviews() {
-  const sessions = listSessions().filter((s) => REVIEW_KINDS.includes(s.chore));
+function buildReviews(all = listSessions()) {
+  const sessions = all.filter((s) => REVIEW_KINDS.includes(s.chore)).map(slim);
   return db.prepare("SELECT * FROM prs WHERE kind = 'review' AND closed_at IS NULL").all().map((pr) => {
     const session = sessions.find((s) => s.repo === pr.repo && s.pr === pr.number) ?? null;
     return {
@@ -89,9 +90,9 @@ function buildReviews() {
 }
 
 /** Epics: open ones + my tickets' parents, each with my tickets under it and its plan sessions. */
-function buildEpics() {
-  const issues = db.prepare('SELECT * FROM issues').all();
-  const sessions = listSessions().filter((s) => s.epic);
+function buildEpics(all = listSessions()) {
+  const issues = db.prepare('SELECT key, summary, status, status_category, parent_key FROM issues').all();
+  const sessions = all.filter((s) => s.epic);
   return db.prepare('SELECT * FROM epics').all().map((e) => ({
     ...e,
     mine: issues.filter((i) => i.parent_key === e.key).map((i) => ({ key: i.key, summary: i.summary, status: i.status, status_category: i.status_category })),
@@ -99,23 +100,41 @@ function buildEpics() {
   })).sort((a, b) => b.mine.length - a.mine.length || (b.updated ?? '').localeCompare(a.updated ?? ''));
 }
 
+// Static-ish bits, computed once.
+const CHORE_LIST = [...CHORES, CUSTOM, REVIEW_CHORE, AUTO_REVIEW_CHORE, BATCH, EPIC_PLAN, STANDUP].map(({ key, label, model, effort }) => ({ key, label, model, effort }));
+
+// Each section is rebuilt only when one of the tables it reads has changed (db.version):
+// a session ticking its token count no longer recomputes Jira, epics or the review history.
+const memo = new Map();
+const cached = (name, deps, build) => {
+  const v = version(...deps);
+  const hit = memo.get(name);
+  if (hit?.v === v) return hit.value;
+  const value = build();
+  memo.set(name, { v, value, json: JSON.stringify(value) });
+  return value;
+};
+const sessionsNow = () => cached('_sessions', ['sessions'], () => listSessions());
+const TABLES = ['issues', 'epics', 'prs', 'sessions', 'events', 'usage', 'slack'];
+
 async function state() {
+  const sessions = sessionsNow();
   return {
     me: config.me,
-    tasks: buildTasks(),
-    reviews: buildReviews(),
-    reviewHistory: buildReviewHistory(),
-    epics: buildEpics(),
-    sessions: listSessions(),
+    tasks: cached('tasks', ['issues', 'prs', 'sessions'], () => buildTasks(sessions)),
+    reviews: cached('reviews', ['prs', 'sessions'], () => buildReviews(sessions)),
+    reviewHistory: cached('reviewHistory', ['prs', 'sessions'], () => buildReviewHistory(sessions)),
+    epics: cached('epics', ['epics', 'issues', 'sessions'], () => buildEpics(sessions)),
+    sessions: cached('sessions', ['sessions'], () => sessions.map(slim)),
     stack: await stackStatus(),
     sync: kv.get('sync') ?? null,
     jira: { ...(kv.get('jira') ?? {}), source: await jiraSource(), site: config.jira.site, service: config.jira.keychainService, email: config.email },
-    autoReview: autoReviewState(),
+    autoReview: cached('autoReview', ['prs', 'sessions', 'kv:autoReview'], autoReviewState),
     team: config.team,
-    events: db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT 150').all(),
-    slack: { ...(kv.get('slack') ?? {}), enabled: config.slack.enabled, model: config.slack.model, items: slackItems() },
-    db: { path: join(config.dataDir, 'ai-dashboard.db'), tables: Object.fromEntries(['issues', 'epics', 'prs', 'sessions', 'events', 'usage', 'slack'].map((t) => [t, db.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n])) },
-    chores: [...CHORES, CUSTOM, REVIEW_CHORE, AUTO_REVIEW_CHORE, BATCH, EPIC_PLAN, STANDUP].map(({ key, label, model, effort }) => ({ key, label, model, effort })),
+    events: cached('events', ['events'], () => db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT 150').all()),
+    slack: cached('slack', ['slack', 'kv:slack'], () => ({ ...(kv.get('slack') ?? {}), enabled: config.slack.enabled, model: config.slack.model, items: slackItems() })),
+    db: cached('db', TABLES, () => ({ path: join(config.dataDir, 'ai-dashboard.db'), tables: Object.fromEntries(TABLES.map((t) => [t, db.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n])) })),
+    chores: CHORE_LIST,
     models: MODELS,
     efforts: EFFORTS,
   };
@@ -126,7 +145,23 @@ const clients = new Set();
 const send = (res, event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 const broadcast = (event, data) => clients.forEach((res) => send(res, event, data));
 let pushTimer;
-const pushState = () => { clearTimeout(pushTimer); pushTimer = setTimeout(async () => broadcast('state', await state()), 100); };
+let last = {}; // section → JSON last sent
+// Coalesced (250 ms), skipped when no tab is open, and only the sections that changed are sent.
+const pushState = () => {
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(async () => {
+    if (!clients.size) return;
+    const st = await state();
+    const patch = {};
+    for (const [k, v] of Object.entries(st)) {
+      const j = memo.get(k)?.value === v ? memo.get(k).json : JSON.stringify(v);
+      if (last[k] !== j) { patch[k] = v; last[k] = j; }
+    }
+    if (!Object.keys(patch).length) return;
+    const body = JSON.stringify(patch);
+    clients.forEach((res) => res.write(`event: patch\ndata: ${body}\n\n`));
+  }, 250);
+};
 onStackLog((line) => broadcast('stacklog', line));
 
 // ---- sync loops --------------------------------------------------------------
@@ -281,7 +316,9 @@ createServer(async (req, res) => {
     if (req.method === 'GET' && pathname === '/live') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
       clients.add(res);
-      send(res, 'state', await state());
+      const st = await state();
+      for (const [k, v] of Object.entries(st)) last[k] ??= JSON.stringify(v);
+      send(res, 'state', st);
       req.on('close', () => clients.delete(res));
       return;
     }

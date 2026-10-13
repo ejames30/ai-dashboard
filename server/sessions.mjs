@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { db, logEvent, update, upsert } from './db.mjs';
@@ -41,6 +41,8 @@ export async function launch({ name, cwd, model, effort, prompt, readOnly, allow
 }
 
 export const listSessions = () => db.prepare('SELECT * FROM sessions ORDER BY started_at DESC LIMIT 300').all();
+/** A session without its heavy fields (prompt, review JSON): what the browser gets. */
+export const slim = ({ prompt, review_json, cwd, ...s }) => s;
 
 // ---- cost ------------------------------------------------------------------
 // Anthropic API list prices, $ per million tokens (claude-api skill, cached 2026-10-06).
@@ -65,9 +67,14 @@ export function costOf(model = '', u) {
 const transcriptPath = (cwd, sessionId) =>
   join(homedir(), '.claude/projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`);
 
+// Transcripts can be MBs and finished sessions are polled for days: re-read only when the file grew.
+const usageCache = new Map(); // path → { size, u }
 function usageOf(cwd, sessionId) {
   const path = transcriptPath(cwd, sessionId);
   if (!existsSync(path)) return null;
+  const size = statSync(path).size;
+  const hit = usageCache.get(path);
+  if (hit?.size === size) return hit.u;
   const seen = new Set();
   const u = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 };
   for (const line of readFileSync(path, 'utf8').split('\n')) {
@@ -83,10 +90,16 @@ function usageOf(cwd, sessionId) {
     u.cost_usd += costOf(msg.model, msg.usage);
     u.turns += 1;
   }
+  usageCache.set(path, { size, u });
   return u;
 }
 
+// `claude logs` is a process spawn: ask at most once a minute per session, give up after 10 tries.
+const rcTries = new Map();
 async function rcUrl(id) {
+  const t = rcTries.get(id) ?? { n: 0, at: 0 };
+  if (t.n >= 10 || Date.now() - t.at < 60_000) return null;
+  rcTries.set(id, { n: t.n + 1, at: Date.now() });
   const logs = await sh('claude', ['logs', id], { timeout: 20_000 }).catch(() => '');
   return logs.match(/https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]+/)?.[0] ?? null;
 }
@@ -103,23 +116,24 @@ export async function pollSessions(onReviewDone) {
   const since = new Date(Date.now() - POLL_WINDOW_MS).toISOString();
   const open = db.prepare(`SELECT * FROM sessions WHERE started_at > ? AND state NOT IN (${[...TERMINAL].map(() => '?').join(',')})`).all(since, ...TERMINAL);
   if (!open.length) return false;
-  const agents = JSON.parse(await sh('claude', ['agents', '--json', '--all'], { timeout: 30_000 }));
+  let agents;
+  try { agents = JSON.parse(await sh('claude', ['agents', '--json', '--all'], { timeout: 30_000 })); } catch { return false; } // truncated output: next tick
   const byId = new Map(agents.map((a) => [a.id, a]));
   let changed = false;
   for (const s of open) {
     const a = byId.get(s.id);
     const state = a ? a.state ?? (a.status === 'busy' ? 'running' : 'idle') : 'gone';
     const patch = { state, session_id: a?.sessionId ?? s.session_id };
-    if (!s.rc_url) patch.rc_url = await rcUrl(s.id);
+    if (!s.rc_url) { const url = await rcUrl(s.id); if (url) patch.rc_url = url; }
     const usage = patch.session_id && usageOf(s.cwd, patch.session_id);
-    if (usage) Object.assign(patch, usage);
+    if (usage) Object.assign(patch, { ...usage, cost_usd: Math.round(usage.cost_usd * 1e4) / 1e4 });
     if ((TERMINAL.has(state) || state === 'done') && s.state !== state) patch.ended_at = new Date().toISOString();
     if (state === 'done' && ['ai-review', 'auto-review'].includes(s.chore) && !s.posted_url && !s.error) Object.assign(patch, await onReviewDone({ ...s, ...patch }));
     if (state !== s.state && (state === 'blocked' || state === 'done')) {
       notify(s, state);
       logEvent(`session-${state}`, `${s.title ?? s.name} — ${state === 'blocked' ? 'attend ta réponse' : 'terminée'}`, { repo: s.repo, pr: s.pr, session: s.id });
     }
-    if (Object.entries(patch).some(([k, v]) => s[k] !== v)) {
+    if (Object.entries(patch).some(([k, v]) => (s[k] ?? null) !== (v ?? null))) {
       update('sessions', { id: s.id }, patch);
       changed = true;
     }

@@ -59,6 +59,17 @@ db.exec(`
     priority TEXT, kind TEXT, permalink TEXT, first_seen TEXT, status TEXT DEFAULT 'new'
   );
 
+  -- Frozen rollups of \`usage\` (recomputed only for the days / sessions a scan touched).
+  CREATE TABLE IF NOT EXISTS usage_hour (
+    day TEXT, hour INTEGER, project TEXT, fam TEXT,
+    cost REAL, tokens INTEGER, input INTEGER, output INTEGER, cache_read INTEGER, cache_write INTEGER, n INTEGER,
+    PRIMARY KEY (day, hour, project, fam)
+  );
+  CREATE TABLE IF NOT EXISTS usage_sess (
+    session_id TEXT PRIMARY KEY, first TEXT, project TEXT, fam TEXT,
+    cost REAL, tokens INTEGER, input INTEGER, output INTEGER, cache_read INTEGER, cache_write INTEGER, n INTEGER
+  );
+
   CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 `);
 
@@ -83,14 +94,21 @@ export const kv = {
     const row = db.prepare('SELECT v FROM kv WHERE k = ?').get(k);
     return row ? JSON.parse(row.v) : undefined;
   },
-  set: (k, v) => db.prepare('INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v').run(k, JSON.stringify(v)),
+  set: (k, v) => { db.prepare('INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v').run(k, JSON.stringify(v)); bump(`kv:${k}`); },
 };
+
+// Data versions: every write bumps its table's counter, so the server can cache whatever is
+// derived from a table until that table actually changes (see memo in index.mjs).
+const versions = new Map();
+export const bump = (name) => versions.set(name, (versions.get(name) ?? 0) + 1);
+export const version = (...names) => names.map((n) => versions.get(n) ?? 0).join('.');
 
 /** Upsert a row object into `table`, keyed by the table's primary key. */
 export function upsert(table, row) {
   const cols = Object.keys(row);
   const sql = `INSERT OR REPLACE INTO ${table} (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`;
   db.prepare(sql).run(...cols.map((c) => row[c] ?? null));
+  bump(table);
 }
 
 export function update(table, where, patch) {
@@ -98,6 +116,7 @@ export function update(table, where, patch) {
   const keys = Object.keys(where);
   const sql = `UPDATE ${table} SET ${cols.map((c) => `${c} = ?`).join(',')} WHERE ${keys.map((k) => `${k} = ?`).join(' AND ')}`;
   db.prepare(sql).run(...cols.map((c) => patch[c] ?? null), ...keys.map((k) => where[k]));
+  bump(table);
 }
 
 /** Append to the event log (also what the live pages stream). */
@@ -105,4 +124,5 @@ export function logEvent(kind, message, extra = {}) {
   const { repo = null, pr = null, session = null, ...data } = extra;
   db.prepare('INSERT INTO events (at, kind, repo, pr, session, message, data) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(new Date().toISOString(), kind, repo, pr, session, message, Object.keys(data).length ? JSON.stringify(data) : null);
+  bump('events');
 }
