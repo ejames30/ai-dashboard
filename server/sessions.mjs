@@ -42,7 +42,7 @@ export async function launch({ name, cwd, model, effort, prompt, readOnly, allow
 
 export const listSessions = () => db.prepare('SELECT * FROM sessions ORDER BY started_at DESC LIMIT 300').all();
 /** A session without its heavy fields (prompt, review JSON): what the browser gets. */
-export const slim = ({ prompt, review_json, cwd, ...s }) => s;
+export const slim = ({ prompt, review_json, ...s }) => s; // cwd stays: the Atelier maps sessions to worktrees
 
 // ---- cost ------------------------------------------------------------------
 // Anthropic API list prices, $ per million tokens (claude-api skill, cached 2026-10-06).
@@ -190,16 +190,21 @@ export async function replySession(session, text) {
  * Terminal.app is the fallback when Warp isn't there.
  */
 export async function openInTerminal(session) {
-  const cmd = `claude attach ${session.id}`;
+  return openTerminalAt(session.cwd, `claude attach ${session.id}`, session.name);
+}
+
+/** A Warp tab (Terminal.app as a fallback) in `cwd`, optionally running `cmd`. */
+export async function openTerminalAt(cwd, cmd, title = cwd.split('/').pop()) {
+  const session = { cwd, name: title, id: Buffer.from(cwd + (cmd ?? '')).toString('hex').slice(-12) };
   if (existsSync('/Applications/Warp.app')) {
     const dir = join(homedir(), '.warp/launch_configurations');
     mkdirSync(dir, { recursive: true });
     const file = `ai-dashboard-${session.id}.yaml`;
-    writeFileSync(join(dir, file), `---\nname: ai-dashboard-${session.id}\nwindows:\n  - tabs:\n      - title: ${JSON.stringify(session.name)}\n        layout:\n          cwd: ${JSON.stringify(session.cwd)}\n          commands:\n            - exec: ${JSON.stringify(cmd)}\n`);
+    writeFileSync(join(dir, file), `---\nname: ai-dashboard-${session.id}\nwindows:\n  - tabs:\n      - title: ${JSON.stringify(session.name)}\n        layout:\n          cwd: ${JSON.stringify(session.cwd)}\n${cmd ? `          commands:\n            - exec: ${JSON.stringify(cmd)}\n` : ''}`);
     await sh('open', [`warp://launch/${file}`]);
     return;
   }
-  const script = `cd ${JSON.stringify(session.cwd)} && ${cmd}`.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const script = `cd ${JSON.stringify(session.cwd)}${cmd ? ` && ${cmd}` : ''}`.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   await sh('osascript', ['-e', `tell application "Terminal" to do script "${script}"`, '-e', 'tell application "Terminal" to activate']);
 }
 

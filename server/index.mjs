@@ -14,10 +14,11 @@ import { autoReviewState, runAutoReview } from './autoreview.mjs';
 import { syncGithub } from './github.mjs';
 import { setSlackStatus, slackItems, syncSlack } from './slack.mjs';
 import { generateStandup, listStandups, standupTick } from './standup.mjs';
+import { graphOps, graphState, isWorktree, scanWorktrees } from './graph.mjs';
 import { scanUsage, usageStats } from './usage.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { jiraSource, resetJiraToken, syncJira } from './jira.mjs';
-import { PLAN_TOOLS, launch, listSessions, slim, openInTerminal, pollSessions, postDraftReview, replySession, reviewFromTranscript, stopSession, transcript } from './sessions.mjs';
+import { PLAN_TOOLS, launch, listSessions, slim, openInTerminal, openTerminalAt, pollSessions, postDraftReview, replySession, reviewFromTranscript, stopSession, transcript } from './sessions.mjs';
 import { onStackLog, refreshStack, stackStatus, startStack, stopStack, switchStack } from './stack.mjs';
 import { reviewWorktree, scratchWorktree, taskWorktree } from './worktrees.mjs';
 
@@ -136,6 +137,7 @@ async function state() {
     slack: cached('slack', ['slack', 'kv:slack'], () => ({ ...(kv.get('slack') ?? {}), enabled: config.slack.enabled, model: config.slack.model, items: slackItems() })),
     db: cached('db', TABLES, () => ({ path: join(config.dataDir, 'ai-dashboard.db'), tables: Object.fromEntries(TABLES.map((t) => [t, db.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n])) })),
     standups: cached('standups', ['standups'], listStandups),
+    graph: cached('graph', ['graph', 'worktrees'], graphState),
     chores: CHORE_LIST,
     models: MODELS,
     efforts: EFFORTS,
@@ -201,11 +203,12 @@ const SOURCES = {
   sessions: () => pollSessions(onReviewDone),
   usage: () => scanUsage().then(() => kv.set('usageScannedAt', new Date().toISOString())),
   stack: async () => {},
+  graph: () => scanWorktrees(),
 };
 const SCOPES = {
   home: ['github', 'jira', 'slack', 'sessions'], tasks: ['github', 'jira', 'sessions'], jira: ['jira'], epics: ['jira', 'sessions'],
   reviews: ['github', 'sessions'], radar: ['radar', 'sessions'], brutal: ['github', 'sessions'], slack: ['slack'],
-  sessions: ['sessions'], usage: ['usage'], stack: ['stack'], data: ['usage'],
+  sessions: ['sessions'], usage: ['usage'], stack: ['stack'], data: ['usage'], atelier: ['graph', 'sessions', 'github'],
 };
 async function refresh(scope) {
   const names = SCOPES[scope] ?? Object.keys(SOURCES);
@@ -239,6 +242,9 @@ const usageTick = () => scanUsage().then((n) => { kv.set('usageScannedAt', new D
 setInterval(usageTick, 5 * 60_000);
 usageTick();
 setInterval(() => standupTick()?.finally(pushState), 60_000);
+const wtTick = () => scanWorktrees().then(pushState).catch((e) => console.error('worktrees', e.message));
+setInterval(wtTick, 2 * 60_000);
+wtTick();
 sync();
 
 // Read-only connection for the SQL console: it can't write, whatever the query says.
@@ -272,6 +278,10 @@ function choreDefaults(body) {
   }
   const task = body.task ? findTask(body.task) : null;
   const chore = choreByKey(body.chore) ?? CUSTOM;
+  if (body.kind === 'here') {
+    if (!isWorktree(body.cwd)) throw httpError(400, 'unknown worktree');
+    return { chore, task, here: body.cwd, prompt: `You are in the existing worktree ${body.cwd} — work here, on its current branch.\n\n${chore.prompt(task)}` };
+  }
   return { chore, task, prompt: chore.prompt(task) };
 }
 
@@ -281,8 +291,8 @@ async function startSession(body) {
   const effort = EFFORTS.includes(body.effort) ? body.effort : d.chore.effort;
   const prompt = (body.prompt ?? d.prompt).trim();
   const repo = repoBySlug(d.pr?.repo ?? d.task?.pr?.repo ?? config.repos[0].slug);
-  const cwd = d.pr ? await reviewWorktree(repo, d.pr) : d.task ? await taskWorktree(repo, d.task) : await scratchWorktree(repo, d.tasks ? 'batch' : d.epic ? `plan-${d.epic.key}` : 'custom');
-  const label = d.pr ? `review-${d.pr.number}` : d.task ? d.task.key : d.tasks ? `${d.tasks.length}-tickets` : d.epic ? d.epic.key : 'custom';
+  const cwd = d.here ? d.here : d.pr ? await reviewWorktree(repo, d.pr) : d.task ? await taskWorktree(repo, d.task) : await scratchWorktree(repo, d.tasks ? 'batch' : d.epic ? `plan-${d.epic.key}` : 'custom');
+  const label = d.here ? `${d.here.split('/').pop()}${d.task ? `-${d.task.key}` : ''}` : d.pr ? `review-${d.pr.number}` : d.task ? d.task.key : d.tasks ? `${d.tasks.length}-tickets` : d.epic ? d.epic.key : 'custom';
   return launch({
     name: `eric-ai-${label}-${d.chore.key}`.slice(0, 60),
     cwd, model, effort, prompt,
@@ -372,6 +382,13 @@ createServer(async (req, res) => {
         return json(res, 200, { rows });
       }
       if (pathname === '/api/standup') { generateStandup({ model: body.model === 'opus' ? 'opus' : 'sonnet' }).finally(pushState); pushState(); return json(res, 202, { ok: true }); }
+      const g = pathname.match(/^\/api\/graph\/(pos|resetPos|addNode|editNode|deleteNode|addEdge|deleteEdge)$/);
+      if (g) { const id = graphOps[g[1]](body); pushState(); return json(res, 200, { ok: true, id }); }
+      if (pathname === '/api/worktree/terminal') {
+        if (!isWorktree(body.path)) throw httpError(400, 'unknown worktree');
+        await openTerminalAt(body.path, body.claude ? 'claude' : null);
+        return json(res, 200, { ok: true });
+      }
       if (pathname === '/api/refresh') return json(res, 200, { results: await refresh(String(body.scope ?? '')) });
       if (pathname === '/api/sync') { resetJiraToken(); await sync({ force: true }); return json(res, 200, { ok: true }); }
       if (pathname === '/api/sessions') { const id = await startSession(body); pushState(); return json(res, 200, { id }); }

@@ -50,6 +50,7 @@ const PAGES = {
   usage: ['Conso IA', 'Tokens et coût estimé de TOUTES tes sessions Claude Code sur ce Mac'],
   data: ['Journal & base', 'Tout ce que la machine fait, et ta base locale SQLite interrogeable'],
   brutal: ['Brutal reviews', 'Chaque review faite par Claude : verdict, findings, coût'],
+  atelier: ['Atelier', 'Tes worktrees, tes agents, leurs PR et tickets — déplace, ajoute, relie'],
   sessions: ['Sessions', 'Chaque session Claude lancée depuis le dashboard'],
   stack: ['Stack local', 'Metro sur un checkout détaché, jamais ton clone principal'],
 };
@@ -827,6 +828,234 @@ $('#palette').addEventListener('click', (e) => { if (e.target.id === 'palette') 
 document.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openPalette(); } });
 $('#paletteBtn').onclick = openPalette;
 
+// ---- atelier: worktrees × agents × PRs × tickets, on a board --------------------------
+// Auto nodes come from the data (repo → worktrees → sessions / PR → ticket); my own nodes
+// (notes, tickets, epics) and links are stored server-side. Drag a node to move it, drag
+// from its ● port onto another node to link them — a ticket dropped on a worktree offers to
+// launch Claude there, on a session to send it the ticket.
+const G = { pan: [40, 20], zoom: 0.9, pos: {}, sel: null, drag: null, link: null, built: null };
+try { Object.assign(G, store.get('atelierView', {})); } catch {}
+const wtName = (p) => p.split('/').filter(Boolean).slice(-1)[0];
+function buildGraph() {
+  const g = S.graph ?? { worktrees: [], nodes: [], edges: [], pos: {} };
+  const f = fget('atelier');
+  const nodes = [], edges = [];
+  const add = (n) => { nodes.push(n); return n.id; };
+  const link = (src, dst, manual, extra = {}) => edges.push({ src, dst, manual, ...extra });
+  const onlyActive = chip('atelier', 'scope', 'all') === 'active';
+  const prsByBranch = new Map(S.tasks.filter((t) => t.pr).map((t) => [t.pr.head, t]));
+  const reviewByNum = new Map(S.reviews.map((r) => [r.number, r]));
+  const repos = [...new Set(g.worktrees.map((w) => w.repo))];
+  for (const r of repos) add({ id: `repo:${r}`, type: 'repo', label: r.split('/')[1], sub: r });
+  for (const w of g.worktrees) {
+    const sessions = S.sessions.filter((s) => s.cwd && (s.cwd === w.path || s.cwd.startsWith(`${w.path}/`)));
+    const active = sessions.some((s) => ACTIVE.includes(s.state));
+    const t = w.branch ? prsByBranch.get(w.branch) : null;
+    const reviewNum = Number(wtName(w.path).match(/^review-(\d+)$/)?.[1]) || null;
+    if (onlyActive && !active && !w.dirty && !t) continue;
+    const id = add({ id: `wt:${w.path}`, type: 'worktree', w, active, label: wtName(w.path), sub: w.branch ?? `détaché @ ${w.head}` });
+    link(`repo:${w.repo}`, id, false);
+    for (const s of sessions.filter((x) => !onlyActive || ACTIVE.includes(x.state)).slice(0, 4)) {
+      link(id, add({ id: `s:${s.id}`, type: 'session', s, label: what(s), sub: `${choreLabel(s.chore)} · ${s.model}` }), false);
+    }
+    if (t) {
+      const pid = add({ id: `pr:${t.pr.number}`, type: 'pr', pr: t.pr, label: `#${t.pr.number}`, sub: t.pr.title });
+      link(id, pid, false);
+      if (t.issue) link(pid, add({ id: `t:${t.key}`, type: 'ticket', key: t.key, issue: t.issue, label: t.key, sub: t.issue.summary }), false);
+    } else if (reviewNum && reviewByNum.get(reviewNum)) {
+      const r = reviewByNum.get(reviewNum);
+      link(id, add({ id: `pr:${r.number}`, type: 'pr', pr: r, label: `#${r.number}`, sub: `${r.title} · @${r.author}` }), false);
+    }
+  }
+  const have = new Set(nodes.map((n) => n.id));
+  for (const n of g.nodes) {
+    if (n.type === 'ticket' && have.has(`t:${n.ref}`)) { n.alias = `t:${n.ref}`; continue; }
+    const issue = n.type === 'ticket' ? S.tasks.find((t) => t.key === n.ref)?.issue : null;
+    const epic = n.type === 'epic' ? (S.epics ?? []).find((e) => e.key === n.ref) : null;
+    add({ id: n.id, type: n.type, manual: true, label: n.type === 'note' ? n.label : n.ref ?? n.label, sub: issue?.summary ?? epic?.summary ?? (n.type === 'note' ? '' : n.label), key: n.ref, issue });
+  }
+  const alias = Object.fromEntries(g.nodes.filter((n) => n.alias).map((n) => [n.id, n.alias]));
+  const ids = new Set(nodes.map((n) => n.id));
+  for (const e of g.edges) { const src = alias[e.src] ?? e.src, dst = alias[e.dst] ?? e.dst; if (ids.has(src) && ids.has(dst)) link(src, dst, true, { id: e.id, label: e.label }); }
+  // Default layout: one row per worktree, its things fanned out to the right.
+  const COL = { repo: 0, worktree: 300, session: 640, pr: 960, ticket: 1280, note: 1600, epic: 1600, group: 1600 };
+  let row = 0; const used = {};
+  for (const n of nodes) {
+    if (g.pos[n.id]) { n.x = g.pos[n.id][0]; n.y = g.pos[n.id][1]; continue; }
+    const col = COL[n.type] ?? 1280;
+    if (n.type === 'worktree') row = Math.max(row, used[300] ?? 0);
+    const y = Math.max(used[col] ?? 0, n.type === 'worktree' || n.type === 'repo' ? row : (used[col] ?? 0));
+    n.x = col; n.y = n.type === 'repo' ? 0 : y;
+    used[col] = n.y + (n.type === 'worktree' ? 124 : 104);
+    if (n.type === 'worktree') row = n.y;
+  }
+  const q = f.q.toLowerCase();
+  for (const n of nodes) n.hit = !q || `${n.label} ${n.sub}`.toLowerCase().includes(q);
+  return { nodes, edges };
+}
+const NODE_W = 260;
+function nodeHtml(n) {
+  const sel = G.sel === n.id ? 'sel' : '';
+  const dim = n.hit ? '' : 'dim';
+  const base = (cls, head, body = '', actions = '') => `<div class="gn ${cls} ${sel} ${dim}" data-gn="${esc(n.id)}" style="transform:translate(${n.x}px,${n.y}px)">
+    <div class="gn-head">${head}</div>${body ? `<div class="gn-body">${body}</div>` : ''}<div class="gn-act">${actions}</div><span class="port" data-port="${esc(n.id)}" title="Glisse vers un autre élément pour les relier"></span></div>`;
+  if (n.type === 'repo') return base('repo', `<span class="gi">⬢</span><b>${esc(n.label)}</b>`, `<span class="faint">${esc(n.sub)}</span>`);
+  if (n.type === 'worktree') {
+    const w = n.w;
+    return base(`worktree ${n.active ? 'live' : ''}`, `<span class="gi">⑂</span><b>${esc(n.label)}</b>${n.active ? '<span class="dot live"></span>' : ''}`,
+      `<div class="mono small">${esc(n.sub)}</div><div class="gn-tags">${w.dirty ? `<span class="badge warn">● ${w.dirty} modif.</span>` : '<span class="badge ok">propre</span>'}${w.ahead ? `<span class="badge info">↑${w.ahead}</span>` : ''}${w.behind ? `<span class="badge err">↓${w.behind}</span>` : ''}${w.last_commit_at ? `<span class="faint small">${ago(w.last_commit_at)}</span>` : ''}</div>`,
+      `<button class="ghost" data-wt-term="${esc(w.path)}" title="Ouvrir dans Warp">⌘</button><button class="ghost" data-wt-claude="${esc(w.path)}" title="Lancer Claude ici">▶</button>`);
+  }
+  if (n.type === 'session') return base(`session ${ACTIVE.includes(n.s.state) ? 'live' : ''}`, `<span class="gi">✦</span><b>${esc(n.label)}</b>`, `${sessionBadge(n.s)} <span class="faint small">${esc(n.sub)} · ${money(n.s.cost_usd)}</span>`,
+    `<button class="ghost" data-open-session="${n.s.id}" title="Conversation">💬</button><button class="ghost" data-term="${n.s.id}" title="Terminal">⌘</button>`);
+  if (n.type === 'pr') return base('pr', `<span class="gi">⇄</span><b>${esc(n.label)}</b> ${checksBadge(n.pr.checks)}`, `<div class="small gn-clip">${esc(n.sub)}</div>`, `<a class="ghost" href="${esc(n.pr.url)}" target="_blank">↗</a>`);
+  if (n.type === 'ticket') return base(`ticket ${n.manual ? 'mine' : ''}`, `<span class="gi">◆</span><b>${esc(n.label)}</b>${n.issue ? ` <span class="faint small">${esc(n.issue.status)}</span>` : ''}`, `<div class="small gn-clip">${esc(n.sub ?? '')}</div>`,
+    `<a class="ghost" href="${esc(`${S.jira.site}/browse/${n.key}`)}" target="_blank">↗</a>${n.manual ? `<button class="ghost" data-gdel="${esc(n.id)}" title="Retirer">✕</button>` : ''}`);
+  if (n.type === 'epic') return base('epic', `<span class="gi">✦</span><b>${esc(n.label)}</b>`, `<div class="small gn-clip">${esc(n.sub ?? '')}</div>`, `<button class="ghost" data-epic="${esc(n.key)}" title="Planifier">✦</button><button class="ghost" data-gdel="${esc(n.id)}">✕</button>`);
+  return base('note', `<span class="gi">✎</span><span class="gn-note" contenteditable="true" data-gnote="${esc(n.id)}" spellcheck="false">${esc(n.label || 'Note…')}</span>`, '', `<button class="ghost" data-gdel="${esc(n.id)}">✕</button>`);
+}
+function edgePath(a, b) {
+  const x1 = a.x + NODE_W, y1 = a.y + 28, x2 = b.x, y2 = b.y + 28;
+  const dx = Math.max(60, Math.abs(x2 - x1) / 2);
+  return `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`;
+}
+function renderAtelier() {
+  if (G.drag || G.link) return; // never rebuild under the pointer
+  filterBar('atelier', {
+    search: 'Surligner (worktree, branche, ticket, session)…',
+    chips: [{ name: 'scope', options: [['all', 'Tout'], ['active', 'Actifs seulement']] }],
+    extra: `<button data-gadd="note">＋ Note</button><button data-gadd="ticket">＋ Ticket</button><button data-gadd="epic">＋ Epic</button>
+      <span class="spacer"></span><button class="ghost" data-gzoom="-">−</button><button class="ghost" data-gzoom="fit">Ajuster</button><button class="ghost" data-gzoom="+">＋</button>
+      <button class="ghost" id="gReset" title="Remettre la disposition automatique">⟲ Disposition auto</button>`,
+  });
+  const { nodes, edges } = (G.built = buildGraph());
+  const by = Object.fromEntries(nodes.map((n) => [n.id, n]));
+  const wrap = $('#r-atelier');
+  if (!wrap.querySelector('.gwrap')) wrap.innerHTML = `<div class="gwrap" id="gWrap"><div class="gworld" id="gWorld"><svg class="gedges" id="gEdges"></svg><div id="gNodes"></div></div>
+    <div class="ghint">Glisse le fond pour te déplacer · molette pour zoomer · glisse un ● sur un autre élément pour les relier · Suppr pour effacer un lien</div></div>`;
+  $('#gNodes').innerHTML = nodes.map(nodeHtml).join('');
+  $('#gEdges').innerHTML = `<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+    ${edges.map((e, i) => { const a = by[e.src], b = by[e.dst]; if (!a || !b) return ''; return `<path class="ge ${e.manual ? 'manual' : ''} ${G.sel === e.id ? 'sel' : ''}" data-ei="${i}" ${e.id ? `data-ge="${e.id}"` : ''} d="${edgePath(a, b)}" marker-end="url(#ah)"/>${e.label ? `<text x="${(a.x + NODE_W + b.x) / 2}" y="${(a.y + b.y) / 2 + 22}" class="gel">${esc(e.label)}</text>` : ''}`; }).join('')}
+    <path id="gTemp" class="ge temp" d=""/>`;
+  applyView();
+}
+function applyView() { const w = $('#gWorld'); if (w) w.style.transform = `translate(${G.pan[0]}px,${G.pan[1]}px) scale(${G.zoom})`; store.set('atelierView', { pan: G.pan, zoom: G.zoom }); }
+const toWorld = (e) => { const r = $('#gWrap').getBoundingClientRect(); return [(e.clientX - r.left - G.pan[0]) / G.zoom, (e.clientY - r.top - G.pan[1]) / G.zoom]; };
+function fitView() {
+  const ns = G.built?.nodes ?? []; if (!ns.length) return;
+  const r = $('#gWrap').getBoundingClientRect();
+  const minX = Math.min(...ns.map((n) => n.x)), maxX = Math.max(...ns.map((n) => n.x + NODE_W)), minY = Math.min(...ns.map((n) => n.y)), maxY = Math.max(...ns.map((n) => n.y + 90));
+  G.zoom = Math.max(0.25, Math.min(1.2, Math.min(r.width / (maxX - minX + 80), r.height / (maxY - minY + 80))));
+  G.pan = [40 - minX * G.zoom, 40 - minY * G.zoom]; applyView();
+}
+document.addEventListener('mousedown', (e) => {
+  if (pageFromHash() !== 'atelier' || !e.target.closest('#gWrap') || e.button !== 0) return;
+  const port = e.target.closest('[data-port]');
+  if (port) { e.preventDefault(); G.link = { src: port.dataset.port }; return; }
+  if (e.target.closest('button, a, [contenteditable]')) return;
+  const node = e.target.closest('[data-gn]');
+  const edge = e.target.closest('[data-ge]');
+  if (edge) { G.sel = edge.dataset.ge; renderAtelier(); return; }
+  if (node) {
+    const n = G.built.nodes.find((x) => x.id === node.dataset.gn);
+    const [wx, wy] = toWorld(e);
+    G.drag = { id: n.id, el: node, dx: wx - n.x, dy: wy - n.y, n, moved: false };
+    G.sel = n.id; document.querySelectorAll('.gn.sel').forEach((x) => x.classList.remove('sel')); node.classList.add('sel');
+  } else { G.drag = { pan: true, sx: e.clientX - G.pan[0], sy: e.clientY - G.pan[1] }; G.sel = null; }
+});
+document.addEventListener('mousemove', (e) => {
+  if (G.link) {
+    const a = G.built.nodes.find((n) => n.id === G.link.src); const [wx, wy] = toWorld(e);
+    $('#gTemp')?.setAttribute('d', edgePath(a, { x: wx, y: wy - 28 }));
+    document.querySelectorAll('.gn.drop').forEach((x) => x.classList.remove('drop'));
+    e.target.closest?.('[data-gn]')?.classList.add('drop');
+    return;
+  }
+  if (!G.drag) return;
+  if (G.drag.pan) { G.pan = [e.clientX - G.drag.sx, e.clientY - G.drag.sy]; applyView(); return; }
+  const [wx, wy] = toWorld(e);
+  const n = G.drag.n; n.x = Math.round(wx - G.drag.dx); n.y = Math.round(wy - G.drag.dy); G.drag.moved = true;
+  G.drag.el.style.transform = `translate(${n.x}px,${n.y}px)`;
+  const by = Object.fromEntries(G.built.nodes.map((x) => [x.id, x]));
+  G.built.edges.forEach((ed, i) => { if (ed.src === n.id || ed.dst === n.id) $(`#gEdges [data-ei="${i}"]`)?.setAttribute('d', edgePath(by[ed.src], by[ed.dst])); });
+});
+document.addEventListener('mouseup', async (e) => {
+  if (G.link) {
+    const src = G.link.src; G.link = null;
+    document.querySelectorAll('.gn.drop').forEach((x) => x.classList.remove('drop'));
+    $('#gTemp')?.setAttribute('d', '');
+    const dst = e.target.closest?.('[data-gn]')?.dataset.gn;
+    if (dst && dst !== src) await onConnect(src, dst);
+    return;
+  }
+  const d = G.drag; G.drag = null;
+  if (d && !d.pan && d.moved) await post('/api/graph/pos', { items: [{ id: d.id, x: d.n.x, y: d.n.y }] }).catch((err) => toast(err.message));
+  if (d?.pan) applyView();
+});
+$('#r-atelier')?.addEventListener('wheel', (e) => {
+  if (!e.target.closest('#gWrap')) return;
+  e.preventDefault();
+  const r = $('#gWrap').getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const z = Math.max(0.2, Math.min(2, G.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
+  G.pan = [mx - ((mx - G.pan[0]) * z) / G.zoom, my - ((my - G.pan[1]) * z) / G.zoom]; G.zoom = z; applyView();
+}, { passive: false });
+const nodeById = (id) => G.built.nodes.find((n) => n.id === id);
+async function onConnect(src, dst) {
+  let a = nodeById(src), b = nodeById(dst);
+  const pick = (type) => (a.type === type ? a : b.type === type ? b : null);
+  const ticket = pick('ticket'), wt = pick('worktree'), sess = pick('session');
+  await post('/api/graph/addEdge', { src, dst }).catch((err) => toast(err.message));
+  if (ticket && wt) {
+    const t = S.tasks.find((x) => x.key === ticket.key);
+    return openChore({ kind: 'here', cwd: wt.w.path, ...(t ? { task: t.key, chore: t.next?.key ?? 'start-task' } : { chore: 'custom' }) });
+  }
+  if (ticket && sess) {
+    openDrawer(sess.s.id);
+    $('#sText').value = `Prends aussi en charge ${ticket.key}${ticket.sub ? ` — « ${ticket.sub} »` : ''} (${S.jira.site}/browse/${ticket.key}). Lis le ticket (Atlassian) et dis-moi comment tu l'intègres avant de coder.`;
+    return toast('Message préparé — relis et envoie');
+  }
+  if (wt && pick('epic')) return openChore({ kind: 'epic', epic: pick('epic').key });
+  toast('Relié ✓');
+}
+async function addGraphNode(type) {
+  const r = $('#gWrap').getBoundingClientRect();
+  const [x, y] = [(r.width / 2 - G.pan[0]) / G.zoom - NODE_W / 2, (r.height / 2 - G.pan[1]) / G.zoom - 40];
+  if (type === 'note') return post('/api/graph/addNode', { type, label: 'Nouvelle note', x, y });
+  const key = prompt(type === 'ticket' ? 'Clé du ticket (ex. MO-4692) :' : 'Clé de l’epic (ex. MO-4688) :')?.trim().toUpperCase();
+  if (!key) return;
+  if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) return toast('Clé invalide');
+  const label = type === 'ticket' ? S.tasks.find((t) => t.key === key)?.issue?.summary : (S.epics ?? []).find((e) => e.key === key)?.summary;
+  return post('/api/graph/addNode', { type, ref: key, label: label ?? key, x, y });
+}
+document.addEventListener('click', async (e) => {
+  if (pageFromHash() !== 'atelier') return;
+  const b = e.target.closest('button');
+  try {
+    if (b?.dataset.gadd) return await addGraphNode(b.dataset.gadd);
+    if (b?.dataset.gzoom) { if (b.dataset.gzoom === 'fit') return fitView(); G.zoom = Math.max(0.2, Math.min(2, G.zoom * (b.dataset.gzoom === '+' ? 1.2 : 1 / 1.2))); return applyView(); }
+    if (b?.id === 'gReset') { if (confirm('Remettre toutes les positions en disposition automatique ?')) { await post('/api/graph/resetPos'); setTimeout(fitView, 400); } return; }
+    if (b?.dataset.gdel) return await post('/api/graph/deleteNode', { id: b.dataset.gdel });
+    if (b?.dataset.wtTerm) { await post('/api/worktree/terminal', { path: b.dataset.wtTerm }); return toast('Ouvert dans Warp'); }
+    if (b?.dataset.wtClaude) return openChore({ kind: 'here', cwd: b.dataset.wtClaude, chore: 'custom' });
+  } catch (err) { toast(err.message); }
+});
+document.addEventListener('keydown', async (e) => {
+  if (pageFromHash() !== 'atelier' || e.target.matches('input, textarea, [contenteditable]') || !G.sel) return;
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  const edge = S.graph?.edges.find((x) => x.id === G.sel);
+  const node = S.graph?.nodes.find((x) => x.id === G.sel);
+  if (edge) await post('/api/graph/deleteEdge', { id: edge.id });
+  else if (node) await post('/api/graph/deleteNode', { id: node.id });
+  else return toast('Les éléments automatiques ne se suppriment pas — seulement tes liens et tes nœuds');
+  G.sel = null;
+});
+document.addEventListener('focusout', (e) => {
+  const id = e.target.dataset?.gnote;
+  if (id) post('/api/graph/editNode', { id, label: e.target.textContent.trim() }).catch(() => {});
+});
+RENDER.atelier = renderAtelier;
+
 // ---- session drawer --------------------------------------------------------------
 let openSession = null;
 let convoTimer = null;
@@ -947,7 +1176,7 @@ function renderChrome() {
 // ---- per-page refresh ---------------------------------------------------------------
 // Which sources each page shows (mirrors SCOPES on the server) and how old each one is.
 const PAGE_SOURCES = {
-  standup: ['github', 'jira'], home: ['github', 'jira', 'slack'], tasks: ['github', 'jira'], jira: ['jira'], epics: ['jira'], reviews: ['github'], radar: ['github'],
+  standup: ['github', 'jira'], atelier: ['github'], home: ['github', 'jira', 'slack'], tasks: ['github', 'jira'], jira: ['jira'], epics: ['jira'], reviews: ['github'], radar: ['github'],
   brutal: ['github'], slack: ['slack'], sessions: [], usage: ['usage'], stack: [], data: ['usage'],
 };
 const SOURCE_LABEL = { github: 'GitHub', jira: 'Jira', slack: 'Slack', usage: 'Transcripts' };
@@ -988,6 +1217,7 @@ setInterval(renderFresh, 15_000);
 // A page is skipped when none of the state sections it reads changed.
 const PAGE_FN = {
   standup: [() => renderStandup(), ['standups']],
+  atelier: [() => renderAtelier(), ['graph', 'sessions', 'tasks', 'reviews', 'epics']],
   home: [() => renderHome(), ['sessions', 'tasks', 'reviews', 'reviewHistory', 'slack']],
   tasks: [() => renderTasks(), ['tasks', 'chores']], jira: [() => renderJira(), ['tasks', 'jira']], epics: [() => renderEpics(), ['epics']],
   reviews: [() => renderReviews(), ['reviews', 'autoReview', 'team']], radar: [() => renderRadar(), ['autoReview', 'sessions', 'reviewHistory', 'events']],
@@ -1028,7 +1258,8 @@ async function openChore(params) {
   if (!res.ok) return toast(d.error);
   pending = params;
   $('#mTitle').textContent = d.label;
-  $('#mSub').textContent = params.kind === 'review' ? `PR #${params.pr}`
+  $('#mSub').textContent = params.kind === 'here' ? `Dans le worktree ${params.cwd}${params.task ? ` · ${params.task}` : ''} — sur sa branche actuelle`
+    : params.kind === 'review' ? `PR #${params.pr}`
     : params.kind === 'epic' ? `Epic ${params.epic} — worktree détaché sur master, lecture seule jusqu’à ton go`
     : params.kind === 'batch' ? `${params.tasks.split(',').length} tickets : ${params.tasks.replaceAll(',', ', ')} — un worktree, une branche par ticket`
     : params.task ?? 'Session libre dans un nouveau worktree sur master';
@@ -1103,7 +1334,7 @@ let gPressed = 0;
 document.addEventListener('keydown', (e) => {
   if (e.target.matches('input, textarea, select') || e.metaKey || e.ctrlKey) return;
   if (e.key === 'g') { gPressed = Date.now(); return; }
-  const map = { h: 'home', t: 'tasks', j: 'jira', e: 'epics', r: 'reviews', a: 'radar', b: 'brutal', k: 'slack', s: 'sessions', u: 'usage', l: 'stack', d: 'data' };
+  const map = { w: 'atelier', h: 'home', t: 'tasks', j: 'jira', e: 'epics', r: 'reviews', a: 'radar', b: 'brutal', k: 'slack', s: 'sessions', u: 'usage', l: 'stack', d: 'data' };
   if (Date.now() - gPressed < 800 && map[e.key]) { location.hash = map[e.key]; gPressed = 0; }
 });
 
