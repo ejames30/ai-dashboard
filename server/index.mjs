@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AUTO_REVIEW_CHORE, BATCH, CHORES, CUSTOM, EFFORTS, EPIC_PLAN, IDEA, MODELS, REVIEW_CHORE, STANDUP, choreByKey, nextChore } from './chores.mjs';
+import { AUTO_REVIEW_CHORE, SELF_REVIEW_CHORE, BATCH, CHORES, CUSTOM, EFFORTS, EPIC_PLAN, IDEA, MODELS, REVIEW_CHORE, STANDUP, choreByKey, nextChore } from './chores.mjs';
 import { config, repoBySlug, sizeOf } from './config.mjs';
 import { bump, db, kv, logEvent, update, version } from './db.mjs';
 import { autoReviewState, runAutoReview } from './autoreview.mjs';
@@ -287,9 +287,10 @@ function choreDefaults(body) {
     return { chore: BATCH, tasks, prompt: BATCH.prompt(tasks) };
   }
   if (body.kind === 'review') {
-    const pr = db.prepare("SELECT * FROM prs WHERE kind = 'review' AND closed_at IS NULL AND repo = ? AND number = ?").get(body.repo, Number(body.pr));
+    const self = body.chore === 'self-review';
+    const pr = db.prepare('SELECT * FROM prs WHERE kind = ? AND closed_at IS NULL AND repo = ? AND number = ?').get(self ? 'mine' : 'review', body.repo, Number(body.pr));
     if (!pr) throw httpError(404, 'PR not found');
-    const chore = body.chore === 'auto-review' ? AUTO_REVIEW_CHORE : REVIEW_CHORE;
+    const chore = self ? SELF_REVIEW_CHORE : body.chore === 'auto-review' ? AUTO_REVIEW_CHORE : REVIEW_CHORE;
     return { chore, pr, prompt: chore.prompt(pr) };
   }
   if (body.kind === 'idea') {

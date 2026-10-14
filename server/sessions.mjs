@@ -139,6 +139,11 @@ export async function pollSessions(onReviewDone) {
     if (usage) Object.assign(patch, { ...usage, cost_usd: Math.round(usage.cost_usd * 1e4) / 1e4 });
     if ((TERMINAL.has(state) || state === 'done') && s.state !== state) patch.ended_at = new Date().toISOString();
     if (state === 'done' && ['ai-review', 'auto-review'].includes(s.chore) && !s.posted_url && !s.error) Object.assign(patch, await onReviewDone({ ...s, ...patch }));
+    // My own PR: nothing to post, just keep the findings for the dashboard.
+    if (state === 'done' && s.chore === 'self-review' && !s.review_json && !s.error) {
+      try { const r = reviewFromTranscript({ ...s, ...patch }); patch.review_json = r ? JSON.stringify(r) : null; if (!r) patch.error = 'no ```json review in the final message'; }
+      catch (e) { patch.error = `invalid review JSON: ${e.message}`; }
+    }
     if (state !== s.state && (state === 'blocked' || state === 'done')) {
       notify(s, state);
       logEvent(`session-${state}`, `${s.title ?? s.name} — ${state === 'blocked' ? 'attend ta réponse' : 'terminée'}`, { repo: s.repo, pr: s.pr, session: s.id });

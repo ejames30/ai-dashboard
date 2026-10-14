@@ -45,14 +45,6 @@ export const CHORES = [
     prompt: (t) => `${PREAMBLE}\n\n${prRef(t)} has ${t.pr.unresolved_threads} unresolved review thread(s). Read every unresolved thread (gh api graphql reviewThreads). For each: say whether the reviewer is right, and what you'd change — verify their claims in the code. Give me the list first; after my go, apply the changes, push, and reply on each thread.`,
   },
   {
-    key: 'self-review',
-    label: 'Self review',
-    model: 'fable',
-    effort: 'high',
-    when: (t) => t.pr && !t.pr.is_draft && t.pr.checks === 'SUCCESS' && !t.doneChores.has('self-review'),
-    prompt: (t) => `${PREAMBLE}\n\nRun /brutal-review on ${prRef(t)} — the diff vs origin/${t.pr.base}. ${ticket(t)}. Go deep: hunt the small details I'd miss. Confirm every finding in the code before listing it. Don't change anything; give me the findings ranked.`,
-  },
-  {
     key: 'ready-for-review',
     label: 'Passer en review',
     model: 'haiku',
@@ -115,6 +107,17 @@ export const AUTO_REVIEW_CHORE = {
     "I'll turn it into a draft review and edit it before submitting.",
     "It is posted on the PR as-is, unedited, so write it for the author: precise, actionable, each finding confirmed in the code. If, after really hunting, the PR is clean, say so with an empty comments array.",
   ),
+};
+
+// The same /brutal-review on one of MY PRs, launched by hand: nothing is posted, the findings
+// land in the dashboard (Brutal reviews page) for me to fix.
+export const SELF_REVIEW_CHORE = {
+  ...REVIEW_CHORE,
+  key: 'self-review',
+  label: 'Brutal review de ma PR',
+  prompt: (pr) => REVIEW_CHORE.prompt(pr)
+    .replace(`on teammate PR #${pr.number}`, `on my own PR #${pr.number}`)
+    .replace("I'll turn it into a draft review and edit it before submitting.", "It's MY PR: nothing is posted, the findings land in my dashboard and I fix them myself before anyone else reviews it — so don't spare me."),
 };
 
 // Planning an epic: read everything, explore the code, propose a PR-sized breakdown, wait.

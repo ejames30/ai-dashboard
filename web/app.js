@@ -131,6 +131,13 @@ const selCell = (key) => `<td class="sel"><input type="checkbox" data-sel="${esc
 const sessionLink = (s) => `<a href="#" data-open-session="${s.id}" title="Voir la conversation">${sessionBadge(s)}</a>`;
 const ghBtn = (url, label = 'GitHub') => url ? `<a class="btn gh" href="${esc(url)}" target="_blank" rel="noopener" title="Ouvrir sur GitHub">${GH_ICO}${label} ↗</a>` : '';
 const GH_ICO = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.06-.49.06-.49.8.06 1.23.83 1.23.83.71 1.22 1.87.87 2.33.66.07-.52.28-.87.5-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';
+// My own PR: manual brutal review (nothing posted) + the latest verdict, linking to the Brutal reviews page.
+const selfBrutalBtn = (pr) => {
+  if (!pr) return '';
+  const last = (S.reviewHistory ?? []).find((r) => r.chore === 'self-review' && r.repo === pr.repo && r.pr === pr.number);
+  const verdict = !last ? '' : last.summary ? `<a href="#" data-open-session="${last.id}" title="Voir la dernière brutal review${last.outdated ? ' (nouveaux commits depuis)' : ''}">${sevPills(last.counts)}</a>` : sessionLink(last);
+  return `${verdict}<button class="brutal" data-review="${pr.number}" data-repo="${esc(pr.repo)}" data-rchore="self-review" title="/brutal-review sur ma PR — rien n'est posté, les findings restent ici">⚡ ${last ? 'Relancer' : 'Brutal review'}</button>`;
+};
 const sessPrUrl = (s) => s.pr && s.repo ? `https://github.com/${s.repo}/pull/${s.pr}` : null;
 const termBtn = (s) => `<button class="ghost" data-term="${s.id}" title="claude attach dans Warp">⌘ Terminal</button>`;
 const choreLabel = (k) => S.chores.find((c) => c.key === k)?.label ?? k;
@@ -252,6 +259,7 @@ function renderTasks() {
         <td><div class="row-actions">
           ${t.next ? `<button class="chore" data-chore="${t.next.key}" data-task="${esc(t.key)}">${esc(t.next.label)}</button>` : ''}
           <select data-task-chore="${esc(t.key)}" title="Lancer une autre chore"><option value="">⋯</option>${choreOptions()}</select>
+          ${selfBrutalBtn(pr)}
           ${ghBtn(pr?.url, '')}
           ${last ? termBtn(last) : ''}
           ${pr ? `<button class="ghost" data-stack-branch="${esc(pr.head)}" title="Charger dans le stack local">▶</button>` : ''}
@@ -314,6 +322,7 @@ function renderJira() {
           <td><div class="row-actions">
             <button class="chore" data-chore="${primary.key}" data-task="${esc(t.key)}">${esc(primary.label)}</button>
             <select data-task-chore="${esc(t.key)}" title="Lancer une autre chore"><option value="">⋯</option>${choreOptions()}</select>
+            ${selfBrutalBtn(pr)}
             ${ghBtn(pr?.url, '')}
           </div></td></tr>`;
       }).join('')}</tbody></table></div></div>`).join('');
@@ -466,7 +475,7 @@ function renderBrutal() {
           ${r.posted_url ? `<a href="${esc(r.posted_url)}" target="_blank">review ↗</a>` : ''}
           ${ghBtn(r.url, 'PR')}
           <button class="ghost" data-open-session="${r.id}">Conversation</button>
-          ${r.open && r.chore !== 'self-review' ? `<button class="brutal" data-review="${r.pr}" data-repo="${esc(r.repo)}" data-rchore="${r.chore}">↻ Relancer</button>` : ''}
+          ${r.open ? `<button class="brutal" data-review="${r.pr}" data-repo="${esc(r.repo)}" data-rchore="${r.chore}">↻ Relancer</button>` : ''}
         </div>
       </div>
       ${r.error ? `<div class="small" style="color:var(--rose);margin-top:8px">✗ ${esc(r.error)}</div>` : ''}
@@ -1484,7 +1493,7 @@ const PAGE_FN = {
   atelier: [() => renderAtelier(), ['graph', 'sessions', 'tasks', 'reviews', 'epics']],
   fleet: [() => renderFleet(), ['fleet']],
   home: [() => renderHome(), ['sessions', 'tasks', 'reviews', 'reviewHistory', 'slack']],
-  tasks: [() => renderTasks(), ['tasks', 'chores']], jira: [() => renderJira(), ['tasks', 'jira']], epics: [() => renderEpics(), ['epics']],
+  tasks: [() => renderTasks(), ['tasks', 'chores', 'reviewHistory']], jira: [() => renderJira(), ['tasks', 'jira', 'reviewHistory']], epics: [() => renderEpics(), ['epics']],
   reviews: [() => renderReviews(), ['reviews', 'autoReview', 'team']], radar: [() => renderRadar(), ['autoReview', 'sessions', 'reviewHistory', 'events']],
   brutal: [() => renderBrutal(), ['reviewHistory']], slack: [() => renderSlack(), ['slack']], sessions: [() => renderSessions(), ['sessions']],
   usage: [() => RENDER.usage(), []], stack: [() => renderStack(), ['stack', 'tasks', 'reviews']], data: [() => renderData(), ['events', 'db']],
@@ -1568,7 +1577,7 @@ document.addEventListener('click', async (e) => {
   if (b.id === 'batchBtn') return openChore({ kind: 'batch', tasks: [...SEL].join(',') });
   try {
     if (b.dataset.chore && b.dataset.task) return openChore({ kind: 'task', task: b.dataset.task, chore: b.dataset.chore });
-    if (b.dataset.review) return openChore({ kind: 'review', repo: b.dataset.repo, pr: b.dataset.review, ...(b.dataset.rchore === 'auto-review' ? { chore: 'auto-review' } : {}) });
+    if (b.dataset.review) return openChore({ kind: 'review', repo: b.dataset.repo, pr: b.dataset.review, ...(['auto-review', 'self-review'].includes(b.dataset.rchore) ? { chore: b.dataset.rchore } : {}) });
     if (b.dataset.epic) return openChore({ kind: 'epic', epic: b.dataset.epic });
     if (b.id === 'epicGo') { const k = $('#epicKey').value.trim(); return k ? openChore({ kind: 'epic', epic: k }) : toast('Tape une clé d’epic, ex. MO-1234'); }
     if (b.dataset.term) { await post(`/api/sessions/${b.dataset.term}/terminal`); return toast('Ouvert dans Warp'); }
