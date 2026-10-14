@@ -480,3 +480,8 @@ dialog.side-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100vh; width
 .idea-step { font-size: 13px; font-weight: 600; color: var(--c); }
 .idea-src { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11.5px; } .idea-src > * { background: var(--bg2); padding: 1px 7px; border-radius: 6px; }
 .idea-f { display: flex; gap: 6px; align-items: center; margin-top: auto; padding-top: 4px; }
+
+/* Ouvrir sur GitHub */
+a.btn.gh { display: inline-flex; align-items: center; gap: 5px; font-weight: 500; border: 1px solid var(--line2); background: var(--panel2); color: var(--text); padding: 5px 10px; border-radius: 9px; white-space: nowrap; text-decoration: none; transition: border-color .12s, background .12s; }
+a.btn.gh:hover { border-color: var(--violet); color: var(--text); text-decoration: none; }
+a.btn.gh svg { flex: none; opacity: .85; }

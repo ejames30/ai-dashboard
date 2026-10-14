@@ -129,6 +129,9 @@ const costCell = (t) => (t.sessionCount ? `<span class="cost">${money(t.cost)}</
 const SEL = new Set(); // tickets picked for a multi-ticket session
 const selCell = (key) => `<td class="sel"><input type="checkbox" data-sel="${esc(key)}" ${SEL.has(key) ? 'checked' : ''} aria-label="Sélectionner ${esc(key)}"></td>`;
 const sessionLink = (s) => `<a href="#" data-open-session="${s.id}" title="Voir la conversation">${sessionBadge(s)}</a>`;
+const ghBtn = (url, label = 'GitHub') => url ? `<a class="btn gh" href="${esc(url)}" target="_blank" rel="noopener" title="Ouvrir sur GitHub">${GH_ICO}${label} ↗</a>` : '';
+const GH_ICO = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.06-.49.06-.49.8.06 1.23.83 1.23.83.71 1.22 1.87.87 2.33.66.07-.52.28-.87.5-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';
+const sessPrUrl = (s) => s.pr && s.repo ? `https://github.com/${s.repo}/pull/${s.pr}` : null;
 const termBtn = (s) => `<button class="ghost" data-term="${s.id}" title="claude attach dans Warp">⌘ Terminal</button>`;
 const choreLabel = (k) => S.chores.find((c) => c.key === k)?.label ?? k;
 const choreOptions = () => S.chores.filter((c) => !['ai-review', 'auto-review', 'batch', 'epic-plan'].includes(c.key)).map((c) => `<option value="${c.key}">${esc(c.label)}</option>`).join('');
@@ -157,7 +160,7 @@ function actionItems() {
     items.push({ c: 'emerald', ico: '✓', t: `Prête à merger — ${t.key.startsWith('PR-') ? '' : `${t.key} · `}${t.issue?.summary ?? t.pr.title}`, s: `PR #${t.pr.number} · approuvée, checks verts, sans conflit`, a: `<a class="badge ok" href="${esc(t.pr.url)}" target="_blank">Merger sur GitHub ↗</a>`, w: 0.7 });
   }
   for (const r of S.reviews.filter((x) => x.requested_me && !x.my_review)) {
-    items.push({ c: 'sky', ico: '⇄', t: `Review demandée : #${r.number} ${r.title}`, s: `@${r.author} · ${sizeTag(r.size).replace(/<[^>]+>/g, '')} · ${r.additions + r.deletions} lignes`, a: `<button class="brutal" data-review="${r.number}" data-repo="${esc(r.repo)}">⚡ Brutal review</button> <a href="${esc(r.url)}" target="_blank">ouvrir ↗</a>`, w: 2 });
+    items.push({ c: 'sky', ico: '⇄', t: `Review demandée : #${r.number} ${r.title}`, s: `@${r.author} · ${sizeTag(r.size).replace(/<[^>]+>/g, '')} · ${r.additions + r.deletions} lignes`, a: `<button class="brutal" data-review="${r.number}" data-repo="${esc(r.repo)}">⚡ Brutal review</button> ${ghBtn(r.url)}`, w: 2 });
   }
   for (const r of S.reviewHistory.filter((x) => x.error && x.open)) {
     items.push({ c: 'rose', ico: '✗', t: `Review #${r.pr} non postée`, s: r.error, a: `<button data-review="${r.pr}" data-repo="${esc(r.repo)}" data-rchore="${r.chore}">Relancer</button>`, w: 1 });
@@ -249,6 +252,7 @@ function renderTasks() {
         <td><div class="row-actions">
           ${t.next ? `<button class="chore" data-chore="${t.next.key}" data-task="${esc(t.key)}">${esc(t.next.label)}</button>` : ''}
           <select data-task-chore="${esc(t.key)}" title="Lancer une autre chore"><option value="">⋯</option>${choreOptions()}</select>
+          ${ghBtn(pr?.url, '')}
           ${last ? termBtn(last) : ''}
           ${pr ? `<button class="ghost" data-stack-branch="${esc(pr.head)}" title="Charger dans le stack local">▶</button>` : ''}
         </div></td></tr>`;
@@ -310,6 +314,7 @@ function renderJira() {
           <td><div class="row-actions">
             <button class="chore" data-chore="${primary.key}" data-task="${esc(t.key)}">${esc(primary.label)}</button>
             <select data-task-chore="${esc(t.key)}" title="Lancer une autre chore"><option value="">⋯</option>${choreOptions()}</select>
+            ${ghBtn(pr?.url, '')}
           </div></td></tr>`;
       }).join('')}</tbody></table></div></div>`).join('');
 }
@@ -401,6 +406,7 @@ function renderReviews() {
           <button class="brutal" data-review="${r.number}" data-repo="${esc(r.repo)}" data-rchore="auto-review" title="Brutal review postée directement sur la PR">⚡ Poster</button>
           <button data-review="${r.number}" data-repo="${esc(r.repo)}" title="Brutal review en brouillon GitHub, tu soumets toi-même">Brouillon</button>
           <button class="ghost" data-stack-pr="${r.number}" title="Charger dans le stack local">▶</button>
+          ${ghBtn(r.url)}
         </div></td></tr>`;
     }).join('')}</tbody></table></div></div>` : `<div class="panel"><div class="empty">${all.length ? 'Aucune PR ne correspond aux filtres.' : 'Aucune PR de collègue ouverte.'}</div></div>`;
   $('#r-reviews').innerHTML = `<div class="devs">${devs}</div>${table}`;
@@ -457,7 +463,8 @@ function renderBrutal() {
         </div>
         ${r.summary ? sevPills(r.counts) : sessionBadge(r)}
         <div class="row-actions">
-          ${r.posted_url ? `<a href="${esc(r.posted_url)}" target="_blank">GitHub ↗</a>` : ''}
+          ${r.posted_url ? `<a href="${esc(r.posted_url)}" target="_blank">review ↗</a>` : ''}
+          ${ghBtn(r.url, 'PR')}
           <button class="ghost" data-open-session="${r.id}">Conversation</button>
           ${r.open && r.chore !== 'self-review' ? `<button class="brutal" data-review="${r.pr}" data-repo="${esc(r.repo)}" data-rchore="${r.chore}">↻ Relancer</button>` : ''}
         </div>
@@ -558,7 +565,7 @@ function radarLive() {
   if (!live.length) return '<div class="empty">Aucune review en cours — la prochaine nouvelle PR de l’équipe démarrera ici.</div>';
   return live.map((s) => `<div class="rv"><div class="rv-head"><span class="dot live"></span><div class="grow"><div class="title">#${s.pr} ${esc(s.title ?? '')}</div>
     <div class="sub">${s.author ? `@${esc(s.author)} · ` : ''}${esc(s.model)} · ${dur(s.started_at)} · ${s.turns} tours · <span class="cost">${money(s.cost_usd)}</span></div></div>
-    <button class="ghost" data-open-session="${s.id}">Conversation</button>${termBtn(s)}</div>
+    ${ghBtn(sessPrUrl(s), '')}<button class="ghost" data-open-session="${s.id}">Conversation</button>${termBtn(s)}</div>
     <div class="ticker">${(liveFeeds[s.id] ?? []).map((m) => m.role === 'tool' ? `<div><b>${esc(m.name)}</b> ${esc(m.text)}</div>` : `<div class="say">${esc(m.text.slice(0, 220))}</div>`).join('') || '<div class="faint">démarrage…</div>'}</div></div>`).join('');
 }
 function renderRadar() {
@@ -589,11 +596,11 @@ function renderRadar() {
           const [cls, label] = RADAR_STATUS[w.status] ?? ['', w.status];
           return `<div class="item c-${w.status === 'posted' ? 'pink' : w.status === 'error' ? 'rose' : 'violet'}"><span class="ico">${w.status === 'posted' ? '⚡' : w.status === 'baseline' ? '·' : '◉'}</span>
             <div style="min-width:0"><div class="t"><a href="${esc(w.url)}" target="_blank">#${w.number}</a> ${esc(w.title)}</div><div class="s">${esc(S.team.find((m) => m.login === w.author)?.name ?? w.author)} · ${w.size} lignes${w.outdated ? ' · nouveaux commits depuis la review' : ''}</div></div>
-            <div class="row-actions"><span class="badge ${cls}">${esc(label)}</span>${w.session ? `<button class="ghost" data-open-session="${w.session.id}">voir</button>` : ''}${['baseline', 'mine'].includes(w.status) || w.outdated ? `<button class="brutal" data-review="${w.number}" data-repo="${esc(w.repo)}" data-rchore="auto-review">⚡ Lancer</button>` : ''}</div></div>`;
+            <div class="row-actions"><span class="badge ${cls}">${esc(label)}</span>${ghBtn(w.url, '')}${w.session ? `<button class="ghost" data-open-session="${w.session.id}">voir</button>` : ''}${['baseline', 'mine'].includes(w.status) || w.outdated ? `<button class="brutal" data-review="${w.number}" data-repo="${esc(w.repo)}" data-rchore="auto-review">⚡ Lancer</button>` : ''}</div></div>`;
         }).join('') || '<div class="empty">Aucune PR ouverte de ces auteurs.</div>'}</div></div>
       </div>
       <div>
-        <div class="panel"><h2>⚡ Ce que le radar a trouvé</h2>${posted.slice(0, 8).map((r) => `<div class="rv"><div class="rv-head"><div class="grow"><div class="title">${r.url ? `<a href="${esc(r.url)}" target="_blank">#${r.pr}</a>` : `#${r.pr}`} ${esc(r.title ?? '')}</div><div class="sub">${esc(S.team.find((m) => m.login === r.author)?.name ?? r.author ?? '')} · ${ago(r.started_at)} · <span class="cost">${money(r.cost_usd)}</span></div></div>${r.summary ? sevPills(r.counts) : sessionBadge(r)}</div>
+        <div class="panel"><h2>⚡ Ce que le radar a trouvé</h2>${posted.slice(0, 8).map((r) => `<div class="rv"><div class="rv-head"><div class="grow"><div class="title">${r.url ? `<a href="${esc(r.url)}" target="_blank">#${r.pr}</a>` : `#${r.pr}`} ${esc(r.title ?? '')}</div><div class="sub">${esc(S.team.find((m) => m.login === r.author)?.name ?? r.author ?? '')} · ${ago(r.started_at)} · <span class="cost">${money(r.cost_usd)}</span></div></div>${r.summary ? sevPills(r.counts) : sessionBadge(r)}${ghBtn(r.url, '')}</div>
           ${r.comments.filter((c) => c.severity !== 'suggestion').slice(0, 3).map((c) => `<div class="finding ${esc(c.severity)}"><div class="loc">${SEV_LABEL[c.severity] ?? ''} · ${esc(c.path)}:${esc(c.line)}</div><div class="md">${md(c.body.slice(0, 400))}</div></div>`).join('')}</div>`).join('') || '<div class="empty">Rien encore — les findings apparaîtront ici dès la première review postée.</div>'}</div>
         <div class="panel"><h2>Journal du radar</h2><div class="evlist">${events.slice(0, 40).map(eventRow).join('') || '<div class="empty">Le premier check arrive au prochain sync.</div>'}</div></div>
       </div>
@@ -910,7 +917,7 @@ function nodeHtml(n) {
   }
   if (n.type === 'session') return base(`session ${ACTIVE.includes(n.s.state) ? 'live' : ''}`, `<span class="gi">✦</span><b>${esc(n.label)}</b>`, `${sessionBadge(n.s)} <span class="faint small">${esc(n.sub)} · ${money(n.s.cost_usd)}</span>`,
     `<button class="ghost" data-open-session="${n.s.id}" title="Conversation">💬</button><button class="ghost" data-term="${n.s.id}" title="Terminal">⌘</button>`);
-  if (n.type === 'pr') return base('pr', `<span class="gi">⇄</span><b>${esc(n.label)}</b> ${checksBadge(n.pr.checks)}`, `<div class="small gn-clip">${esc(n.sub)}</div>`, `<a class="ghost" href="${esc(n.pr.url)}" target="_blank">↗</a>`);
+  if (n.type === 'pr') return base('pr', `<span class="gi">⇄</span><b>${esc(n.label)}</b> ${checksBadge(n.pr.checks)}`, `<div class="small gn-clip">${esc(n.sub)}</div>`, ghBtn(n.pr.url, ''));
   if (n.type === 'ticket') return base(`ticket ${n.manual ? 'mine' : ''}`, `<span class="gi">◆</span><b>${esc(n.label)}</b>${n.issue ? ` <span class="faint small">${esc(n.issue.status)}</span>` : ''}`, `<div class="small gn-clip">${esc(n.sub ?? '')}</div>`,
     `<a class="ghost" href="${esc(`${S.jira.site}/browse/${n.key}`)}" target="_blank">↗</a>${n.manual ? `<button class="ghost" data-gdel="${esc(n.id)}" title="Retirer">✕</button>` : ''}`);
   if (n.type === 'epic') return base('epic', `<span class="gi">✦</span><b>${esc(n.label)}</b>`, `<div class="small gn-clip">${esc(n.sub ?? '')}</div>`, `<button class="ghost" data-epic="${esc(n.key)}" title="Planifier">✦</button><button class="ghost" data-gdel="${esc(n.id)}">✕</button>`);
@@ -1291,7 +1298,7 @@ async function loadConvo() {
   const { session: s, items } = await res.json();
   $('#sTitle').textContent = what(s);
   $('#sMeta').innerHTML = `${sessionBadge(s)} · ${esc(choreLabel(s.chore))} · ${esc(s.model)} · ${esc(s.effort)} · ${s.turns} tours · <span class="cost">${money(s.cost_usd)}</span> · il y a ${ago(s.started_at)}`;
-  $('#sLinks').innerHTML = `${termBtn(s)}${s.rc_url ? ` <a href="${esc(s.rc_url)}" target="_blank" class="small muted">web ↗</a>` : ''} ${ACTIVE.includes(s.state) ? `<button class="ghost" data-stop="${s.id}">stop</button>` : ''}`;
+  $('#sLinks').innerHTML = `${ghBtn(sessPrUrl(s), `PR #${s.pr}`)} ${termBtn(s)}${s.rc_url ? ` <a href="${esc(s.rc_url)}" target="_blank" class="small muted">web ↗</a>` : ''} ${ACTIVE.includes(s.state) ? `<button class="ghost" data-stop="${s.id}">stop</button>` : ''}`;
   $('#sHint').textContent = s.state === 'blocked' ? 'Claude attend une réponse — ton message la débloque.'
     : LIVE.includes(s.state) ? 'Claude travaille : envoyer l’interrompt et reprend avec ton message.' : 'La session reprend avec ton message, contexte intact.';
   const el = $('#sConvo');
@@ -1322,7 +1329,8 @@ async function loadFleetConvo(sid) {
   const [c, ico, lab] = FLEET_STATUS[s.status] ?? FLEET_STATUS.ended;
   $('#sTitle').textContent = s.title ?? s.name;
   $('#sMeta').innerHTML = `<span class="fdot c-${c}">${ico}</span> ${lab} · ${esc(s.name)} · ${esc(s.branch ?? '')} · ${esc(s.model ?? '')} · <span class="cost">${money(s.cost)}</span> · ${s.subagents?.length ?? 0} subagents`;
-  $('#sLinks').innerHTML = `<button class="ghost" data-fterm="${s.sid}">⌘ Terminal</button>`;
+  const lastPr = s.prs?.at?.(-1);
+  $('#sLinks').innerHTML = `${lastPr ? ghBtn(lastPr.url, `PR #${lastPr.number}`) : ''} <button class="ghost" data-fterm="${s.sid}">⌘ Terminal</button>`;
   const interactive = s.kind === 'interactive';
   $('#sText').disabled = interactive; $('#sSend').disabled = interactive;
   $('#sHint').textContent = interactive ? 'Ouverte dans un terminal : réponds-y là-bas.' : s.status === 'ended' ? 'Ton message reprend cette session en arrière-plan, contexte intact.' : 'Ton message interrompt puis relance la session avec lui.';
