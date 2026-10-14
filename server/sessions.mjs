@@ -199,8 +199,20 @@ export async function replySession(session, text) {
     await sh('claude', ['stop', session.id]).catch(() => {});
     await new Promise((r) => setTimeout(r, 1500));
   }
-  await sh('claude', ['--bg', '--resume', session.session_id, '--', text], { cwd: session.cwd, timeout: 60_000 });
-  update('sessions', { id: session.id }, { state: 'running', ended_at: null });
+  // Same flags as the first launch: without --settings the resumed agent falls back to the
+  // default permission mode and sits "blocked" on its first tool call.
+  const readOnly = ['ai-review', 'auto-review', 'self-review'].includes(session.chore);
+  const args = ['--bg', '--resume', session.session_id, '-n', session.name, '--remote-control', session.name,
+    '--model', session.model, '--effort', session.effort, '--settings', SESSION_SETTINGS];
+  if (readOnly) args.push('--permission-mode', 'dontAsk', '--allowedTools', ...REVIEW_TOOLS);
+  else if (session.chore === 'epic-plan') args.push('--allowedTools', ...PLAN_TOOLS);
+  args.push('--', text);
+  const out = await sh('claude', args, { cwd: session.cwd, timeout: 60_000 });
+  // A resume is a new background agent with its own id: follow it, or polling marks the row done.
+  const id = out.match(/backgrounded · ([0-9a-f]+)/)?.[1];
+  if (id && id !== session.id) db.prepare('UPDATE sessions SET id = ? WHERE id = ?').run(id, session.id);
+  update('sessions', { id: id ?? session.id }, { state: 'running', ended_at: null });
+  return id ?? session.id;
 }
 
 /**
