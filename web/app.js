@@ -42,6 +42,7 @@ const PAGES = {
   home: ["Aujourd'hui", 'Tout ce qui attend une action, au même endroit'],
   ideas: ['Innovation', 'Chaque matin, des idées concrètes pour rendre l’app et la vie de l’équipe meilleures'],
   standup: ['Stand-up', 'Écrit tout seul chaque jour de semaine à 9h à partir de ce que tu as vraiment fait — ou à la demande'],
+  mine: ['Mes PR', 'Toutes tes PR ouvertes : état, checks, reviews, et ta brutal review avant que l’équipe passe'],
   tasks: ['Tâches', 'Tes PR et tes tickets en cours, avec la prochaine action suggérée'],
   jira: ['Jira', 'Tous les tickets qui te sont assignés'],
   epics: ['Epics & plans', 'Lance un plan sur un epic : Claude lit les tickets et le code, propose un découpage, attend ton go'],
@@ -223,6 +224,48 @@ function renderHome() {
 }
 
 // ---- tasks ---------------------------------------------------------------------
+// ---- my PRs ----------------------------------------------------------------------
+const lastSelf = (pr) => (S.reviewHistory ?? []).find((r) => r.chore === 'self-review' && r.repo === pr.repo && r.pr === pr.number);
+const MINE_STATES = [
+  ['all', 'Toutes'], ['merge', 'Prêtes à merger', (t) => readyToMerge(t.pr)], ['checks', 'Checks KO', (t) => ['FAILURE', 'ERROR'].includes(t.pr.checks)],
+  ['conflicts', 'Conflits', (t) => t.pr.mergeable === 'CONFLICTING'], ['comments', 'Commentaires', (t) => t.pr.unresolved_threads > 0],
+  ['ready', 'En review', (t) => !t.pr.is_draft], ['draft', 'Drafts', (t) => t.pr.is_draft], ['nobrutal', 'Sans brutal review', (t) => !lastSelf(t.pr)],
+];
+function renderMine() {
+  const all = S.tasks.filter((t) => t.pr);
+  $('#c-mine').textContent = all.length || '';
+  const bases = [...new Set(all.map((t) => t.pr.base))].sort();
+  filterBar('mine', {
+    search: 'Rechercher (#, titre, branche, ticket)…',
+    chips: [{ name: 'state', options: MINE_STATES.map(([k, l, fn]) => [k, l, fn ? all.filter(fn).length : all.length]) }],
+    selects: [{ name: 'base', all: 'Toutes les bases', options: bases.map((b) => [b, `→ ${b}`]) }],
+  });
+  const f = fget('mine');
+  const fn = MINE_STATES.find(([k]) => k === chip('mine', 'state', 'all'))?.[2];
+  const base = sel('mine', 'base');
+  const list = all.filter((t) => (!fn || fn(t)) && (!base || t.pr.base === base) && textMatch(f.q, `#${t.pr.number}`, t.pr.title, t.pr.head, t.key, t.issue?.summary));
+  if (!list.length) return ($('#r-mine').innerHTML = `<div class="panel"><div class="empty">${all.length ? 'Aucune PR ne correspond aux filtres.' : 'Aucune PR ouverte.'}</div></div>`);
+  $('#r-mine').innerHTML = `<div class="panel"><div class="scroll"><table>
+    <colgroup><col><col style="width:120px"><col style="width:230px"><col style="width:170px"><col style="width:400px"></colgroup>
+    <thead><tr><th>PR</th><th>Taille</th><th>État</th><th>Ma brutal review</th><th></th></tr></thead>
+    <tbody>${list.map((t) => {
+      const pr = t.pr, b = lastSelf(pr);
+      return `<tr>
+        <td><div class="title"><a href="${esc(pr.url)}" target="_blank">#${pr.number}</a> ${esc(pr.title)}</div>
+          <div class="sub">${t.key.startsWith('PR-') ? '' : `<a class="key" href="${esc(`${S.jira.site}/browse/${t.key}`)}" target="_blank">${esc(t.key)}</a> · `}<span class="mono">${esc(pr.head)}</span> → <span class="mono">${esc(pr.base)}</span> · ${ago(pr.updated)}</div></td>
+        <td>${sizeTag(t.size)}<div class="small">${diffTag(pr.additions, pr.deletions)}</div></td>
+        <td class="wrap">${prState(pr)}</td>
+        <td>${b ? `${b.summary ? `<a href="#" data-open-session="${b.id}" title="Voir la review">${sevPills(b.counts)}</a>` : sessionLink(b)}<div class="muted small">${ago(b.started_at)}${b.outdated ? ' · <span style="color:var(--amber)">nouveaux commits</span>' : ''}</div>` : '<span class="faint small">jamais</span>'}</td>
+        <td><div class="row-actions">
+          ${t.next ? `<button class="chore" data-chore="${t.next.key}" data-task="${esc(t.key)}">${esc(t.next.label)}</button>` : ''}
+          <select data-task-chore="${esc(t.key)}" title="Lancer une autre chore"><option value="">⋯</option>${choreOptions()}</select>
+          <button class="brutal" data-review="${pr.number}" data-repo="${esc(pr.repo)}" data-rchore="self-review" title="/brutal-review sur ma PR — rien n'est posté">⚡ ${b ? 'Relancer' : 'Brutal review'}</button>
+          ${ghBtn(pr.url)}
+        </div></td></tr>`;
+    }).join('')}</tbody></table></div></div>`;
+}
+RENDER.mine = renderMine;
+
 const TASK_STATES = [
   ['all', 'Tout'], ['merge', 'Prêtes à merger', (t) => readyToMerge(t.pr)], ['action', 'Action requise', (t) => t.next && t.next.key !== 'start-task'], ['checks', 'Checks KO', (t) => ['FAILURE', 'ERROR'].includes(t.pr?.checks)],
   ['conflicts', 'Conflits', (t) => t.pr?.mergeable === 'CONFLICTING'], ['comments', 'Commentaires', (t) => t.pr?.unresolved_threads > 0],
@@ -1448,7 +1491,7 @@ function renderChrome() {
 // ---- per-page refresh ---------------------------------------------------------------
 // Which sources each page shows (mirrors SCOPES on the server) and how old each one is.
 const PAGE_SOURCES = {
-  standup: ['github', 'jira'], ideas: [], atelier: ['github'], fleet: [], home: ['github', 'jira', 'slack'], tasks: ['github', 'jira'], jira: ['jira'], epics: ['jira'], reviews: ['github'], radar: ['github'],
+  standup: ['github', 'jira'], mine: ['github'], ideas: [], atelier: ['github'], fleet: [], home: ['github', 'jira', 'slack'], tasks: ['github', 'jira'], jira: ['jira'], epics: ['jira'], reviews: ['github'], radar: ['github'],
   brutal: ['github'], slack: ['slack'], sessions: [], usage: ['usage'], stack: [], data: ['usage'],
 };
 const SOURCE_LABEL = { github: 'GitHub', jira: 'Jira', slack: 'Slack', usage: 'Transcripts' };
@@ -1493,6 +1536,7 @@ const PAGE_FN = {
   atelier: [() => renderAtelier(), ['graph', 'sessions', 'tasks', 'reviews', 'epics']],
   fleet: [() => renderFleet(), ['fleet']],
   home: [() => renderHome(), ['sessions', 'tasks', 'reviews', 'reviewHistory', 'slack']],
+  mine: [() => renderMine(), ['tasks', 'chores', 'reviewHistory']],
   tasks: [() => renderTasks(), ['tasks', 'chores', 'reviewHistory']], jira: [() => renderJira(), ['tasks', 'jira', 'reviewHistory']], epics: [() => renderEpics(), ['epics']],
   reviews: [() => renderReviews(), ['reviews', 'autoReview', 'team']], radar: [() => renderRadar(), ['autoReview', 'sessions', 'reviewHistory', 'events']],
   brutal: [() => renderBrutal(), ['reviewHistory']], slack: [() => renderSlack(), ['slack']], sessions: [() => renderSessions(), ['sessions']],
@@ -1503,6 +1547,7 @@ function renderCounts() {
   const n = (id, v) => { const el = $(id); if (el && el.textContent !== String(v || '')) el.textContent = v || ''; };
   n('#c-tasks', S.tasks.filter((t) => t.pr || t.issue?.status_category === 'indeterminate' || t.sessions.length).length);
   n('#c-jira', S.tasks.filter((t) => t.issue).length);
+  n('#c-mine', S.tasks.filter((t) => t.pr).length);
   n('#c-epics', (S.epics ?? []).filter((e) => e.plans.some((p) => ACTIVE.includes(p.state))).length);
   n('#c-reviews', S.reviews.filter((r) => r.team && !r.my_review && !r.session && !r.is_draft).length);
   n('#c-brutal', (S.reviewHistory ?? []).filter((r) => new Date(r.started_at) >= startOfDay()).length);
@@ -1611,7 +1656,7 @@ let gPressed = 0;
 document.addEventListener('keydown', (e) => {
   if (e.target.matches('input, textarea, select') || e.metaKey || e.ctrlKey) return;
   if (e.key === 'g') { gPressed = Date.now(); return; }
-  const map = { i: 'ideas', f: 'fleet', w: 'atelier', h: 'home', t: 'tasks', j: 'jira', e: 'epics', r: 'reviews', a: 'radar', b: 'brutal', k: 'slack', s: 'sessions', u: 'usage', l: 'stack', d: 'data' };
+  const map = { p: 'mine', i: 'ideas', f: 'fleet', w: 'atelier', h: 'home', t: 'tasks', j: 'jira', e: 'epics', r: 'reviews', a: 'radar', b: 'brutal', k: 'slack', s: 'sessions', u: 'usage', l: 'stack', d: 'data' };
   if (Date.now() - gPressed < 800 && map[e.key]) { location.hash = map[e.key]; gPressed = 0; }
 });
 

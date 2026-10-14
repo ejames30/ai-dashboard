@@ -212,7 +212,7 @@ const SOURCES = {
   fleet: () => scanWorktrees().then(fleetTick),
 };
 const SCOPES = {
-  home: ['github', 'jira', 'slack', 'sessions'], tasks: ['github', 'jira', 'sessions'], jira: ['jira'], epics: ['jira', 'sessions'],
+  home: ['github', 'jira', 'slack', 'sessions'], mine: ['github', 'sessions'], tasks: ['github', 'jira', 'sessions'], jira: ['jira'], epics: ['jira', 'sessions'],
   reviews: ['github', 'sessions'], radar: ['radar', 'sessions'], brutal: ['github', 'sessions'], slack: ['slack'],
   sessions: ['sessions'], usage: ['usage'], stack: ['stack'], data: ['usage'], atelier: ['graph', 'sessions', 'github'], fleet: ['fleet', 'usage'],
 };
