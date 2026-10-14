@@ -229,7 +229,7 @@ async function onReviewDone(session) {
   const out = await postDraftReview(session, pr);
   const auto = session.chore === 'auto-review';
   let counts = '';
-  try { const c = JSON.parse(out.review_json ?? '{}').comments ?? []; counts = ` — ${['critical', 'warning', 'suggestion'].map((k) => `${c.filter((x) => x.severity === k).length} ${k}`).join(', ')}`; } catch {}
+  try { const c = JSON.parse(out.review_json ?? '{}').comments ?? []; counts = ` — ${['critical', 'warning', 'suggestion'].map((k) => `${c.filter((x) => x.severity === k).length} ${{ warning: 'major', suggestion: 'improvement' }[k] ?? k}`).join(', ')}`; } catch {}
   logEvent(out.error ? 'review-error' : auto ? 'review-posted' : 'review-draft',
     out.error ? `Review #${pr.number} non postée : ${out.error}` : `${auto ? 'Brutal review postée' : 'Brouillon de review créé'} sur #${pr.number}${counts}`,
     { repo: pr.repo, pr: pr.number, session: session.id });

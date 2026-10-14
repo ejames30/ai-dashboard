@@ -421,8 +421,8 @@ document.addEventListener('click', (e) => {
 RENDER.reviews = renderReviews;
 
 // ---- brutal reviews ----------------------------------------------------------------
-const sevPills = (c) => `<span class="sev"><span class="c ${c.critical ? '' : 'z'}">${c.critical} crit</span><span class="w ${c.warning ? '' : 'z'}">${c.warning} warn</span><span class="s ${c.suggestion ? '' : 'z'}">${c.suggestion} sugg</span></span>`;
-const SEV_LABEL = { critical: '🚨 Critical', warning: '⚠️ Warning', suggestion: '💡 Suggestion' };
+const sevPills = (c) => `<span class="sev"><span class="c ${c.critical ? '' : 'z'}">${c.critical} crit</span><span class="w ${c.warning ? '' : 'z'}">${c.warning} major</span><span class="s ${c.suggestion ? '' : 'z'}">${c.suggestion} impr</span></span>`;
+const SEV_LABEL = { critical: '🚨 Critical', warning: '⚠️ Major', suggestion: '💡 Improvement' };
 function renderBrutal() {
   const all = S.reviewHistory ?? [];
   $('#c-brutal').textContent = all.filter((r) => new Date(r.started_at) >= startOfDay()).length || '';
@@ -450,8 +450,8 @@ function renderBrutal() {
       <div class="kpi pink"><b>${list.length}</b><small>reviews</small></div>
       <div class="kpi emerald"><b>${posted}</b><small>postées / brouillons créés</small></div>
       <div class="kpi rose"><b>${sum('critical')}</b><small>findings critiques</small></div>
-      <div class="kpi amber"><b>${sum('warning')}</b><small>warnings</small></div>
-      <div class="kpi sky"><b>${sum('suggestion')}</b><small>suggestions</small></div>
+      <div class="kpi amber"><b>${sum('warning')}</b><small>majors</small></div>
+      <div class="kpi sky"><b>${sum('suggestion')}</b><small>improvements</small></div>
       <div class="kpi violet"><b>${money(list.reduce((a, r) => a + (r.cost_usd ?? 0), 0))}</b><small>coût est. · ${money(list.length ? list.reduce((a, r) => a + (r.cost_usd ?? 0), 0) / list.length : 0)} / review</small></div>
     </div>
     <div class="panel">${list.map((r) => `<div class="rv">
@@ -586,7 +586,7 @@ function renderRadar() {
       <div class="kpi violet"><b>${a.watched.length}</b><small>PR surveillées</small></div>
       <div class="kpi pink"><b>${posted.length}</b><small>reviews postées</small></div>
       <div class="kpi rose"><b>${posted.reduce((n, r) => n + r.counts.critical, 0)}</b><small>findings critiques</small></div>
-      <div class="kpi amber"><b>${posted.reduce((n, r) => n + r.counts.warning, 0)}</b><small>warnings</small></div>
+      <div class="kpi amber"><b>${posted.reduce((n, r) => n + r.counts.warning, 0)}</b><small>majors</small></div>
       <div class="kpi emerald"><b>${money(posted.reduce((n, r) => n + (r.cost_usd ?? 0), 0))}</b><small>coût est. total</small></div>
     </div>
     <div class="grid2">

@@ -228,7 +228,9 @@ export async function stopSession(id) {
 }
 
 // ---- AI review → pending GitHub review -------------------------------------
-const SEVERITY = { critical: '🚨 **Critical**', warning: '⚠️ **Warning**', suggestion: '💡 **Suggestion**' };
+const SEVERITY = { critical: '🚨 **Critical**', warning: '⚠️ **Major**', suggestion: '💡 **Improvement**' };
+// The /brutal-review names (major, improvement) stored under the cockpit's historical keys.
+const SEV_KEY = { major: 'warning', improvement: 'suggestion', minor: 'suggestion', nit: 'suggestion' };
 
 /** Turn the review session's JSON into a PENDING review: visible only to me until I submit it. */
 /** The last ```json block of the session's final assistant messages. */
@@ -246,7 +248,11 @@ export function reviewFromTranscript(session) {
     // Comment bodies can hold their own ``` fences, so the block runs to the LAST fence.
     const start = text.lastIndexOf('```json');
     const end = text.lastIndexOf('```');
-    if (start !== -1 && end > start) return JSON.parse(text.slice(start + 7, end));
+    if (start !== -1 && end > start) {
+      const review = JSON.parse(text.slice(start + 7, end));
+      for (const c of review.comments ?? []) c.severity = SEV_KEY[c.severity] ?? c.severity;
+      return review;
+    }
   }
   return null;
 }
@@ -261,8 +267,7 @@ export async function postDraftReview(session, pr) {
   const comments = (review.comments ?? []).filter((c) => c.path && Number.isInteger(c.line)).map((c) => ({
     path: c.path, line: c.line, side: 'RIGHT', body: `${SEVERITY[c.severity] ?? ''}\n\n${c.body}`.trim(),
   }));
-  const footer = publish ? '<sub>🤖 Automated brutal review (Claude), posted by Eric\'s AI Dashboard.</sub>' : '<sub>Review drafted with Claude, checked by me before submitting.</sub>';
-  const summary = `${review.summary ?? ''}\n\n${footer}`;
+  const summary = review.summary ?? '';
   const event = publish ? { event: 'COMMENT' } : {};
   const post = (payload) => gh(['api', '-X', 'POST', `repos/${session.repo}/pulls/${pr.number}/reviews`, '--input', '-'], { input: JSON.stringify(payload) });
   try {
