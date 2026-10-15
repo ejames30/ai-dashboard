@@ -1,4 +1,4 @@
-// Eric's AI Dashboard — one SSE state, eight pages, a filter bar on every list.
+// AI Dashboard — one SSE state, eight pages, a filter bar on every list.
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const md = (s) => (window.marked && window.DOMPurify ? DOMPurify.sanitize(marked.parse(String(s ?? ''), { breaks: true })) : `<p>${esc(s)}</p>`);
@@ -56,6 +56,7 @@ const PAGES = {
   atelier: ['Atelier', 'Tes worktrees, tes agents, leurs PR et tickets — déplace, ajoute, relie'],
   sessions: ['Sessions', 'Chaque session Claude lancée depuis le dashboard'],
   stack: ['Stack local', 'Metro sur un checkout détaché, jamais ton clone principal'],
+  onboarding: ['Onboarding', 'Tout ce dont le dashboard a besoin sur ce Mac — vérifié pour de vrai, avec le correctif à un clic'],
 };
 const pageFromHash = () => (PAGES[location.hash.slice(1)] ? location.hash.slice(1) : 'home');
 function showPage(name) {
@@ -195,7 +196,7 @@ function renderHome() {
   const hello = h < 12 ? 'Bonjour' : h < 18 ? 'Bon après-midi' : 'Bonsoir';
 
   $('#page-home').innerHTML = `
-    <div class="hero"><button class="hero-btn" id="standupBtn">☀ Préparer mon stand-up</button><h2>${hello} Eric 👋</h2>
+    <div class="hero"><button class="hero-btn" id="standupBtn">☀ Préparer mon stand-up</button><h2>${hello} ${esc(S.profile?.firstName ?? '')} 👋</h2>
       <p>${items.length ? `<b>${items.length}</b> chose${items.length > 1 ? 's' : ''} à traiter` : 'Rien ne t’attend — tout roule'} · ${live.length} session${live.length > 1 ? 's' : ''} en cours · ${myPrs.length} PR ouvertes · ${S.tasks.filter((t) => t.issue?.status_category === 'indeterminate').length} tickets en cours</p></div>
     <div class="kpis">
       <div class="kpi pink" data-go="sessions"><b>${blocked.length}</b><small>attendent ta réponse</small></div>
@@ -1472,6 +1473,48 @@ function renderStackLog() {
   if (atBottom) el.scrollTop = el.scrollHeight;
 }
 
+// ---- onboarding ------------------------------------------------------------------------
+const OB_GROUPS = ['Toi', 'Outils', 'Connecteurs claude.ai', 'Code', 'Optionnel'];
+function renderOnboarding() {
+  const o = S.onboarding ?? { checks: [] };
+  const checks = o.checks ?? [];
+  const req = checks.filter((c) => c.required);
+  const done = req.filter((c) => c.ok).length;
+  const row = (c) => {
+    const st = c.ok ? ['ok', '✓'] : c.required ? ['err', '✗'] : ['warn', '!'];
+    const f = !c.ok && c.fix;
+    return `<div class="ob-row ${st[0]}"><span class="ob-st">${st[1]}</span><div class="ob-body">
+      <div class="t">${esc(c.label)}${c.required ? '' : ' <span class="badge">optionnel</span>'}</div>
+      <div class="s">${esc(c.detail ?? '')}</div>
+      ${f ? `<div class="ob-fix">${f.text ? `<div>${esc(f.text)}</div>` : ''}${f.cmd ? `<code>${esc(f.cmd)}</code>` : ''}</div>` : ''}
+    </div><div class="row-actions">
+      ${f?.cmd ? `<button class="chore" data-obfix="${esc(c.key)}">Ouvrir dans le terminal</button><button class="ghost" data-copy="${esc(f.cmd)}" title="Copier la commande">⧉</button>` : ''}
+      ${f?.url ? `<a class="btnlink" href="${esc(f.url)}" target="_blank" rel="noopener">Ouvrir ↗</a>` : ''}
+    </div></div>`;
+  };
+  const groups = OB_GROUPS.map((g) => [g, checks.filter((c) => c.group === g)]).filter(([, l]) => l.length);
+  $('#page-onboarding').innerHTML = `
+    <div class="hero"><h2>${o.missing === 0 && checks.length ? `Tout est prêt${S.profile?.firstName ? `, ${esc(S.profile.firstName)}` : ''} 🎉` : 'Bienvenue dans le dashboard 👋'}</h2>
+      <p>${checks.length ? `<b>${done}/${req.length}</b> étapes indispensables OK` : 'Première vérification…'}${o.running ? ' · <span class="spin">vérification en cours…</span>' : o.at ? ` · vérifié il y a ${ago(o.at)}` : ''}</p>
+      <div class="row-actions" style="justify-content:flex-start;margin-top:12px">
+        <button id="obCheck" ${o.running ? 'disabled' : ''}>⟳ Re-vérifier</button>
+        ${o.missing === 0 && checks.length ? '<button class="primary" data-go="home">Aller à Aujourd’hui →</button>' : ''}
+      </div></div>
+    ${o.error ? `<div class="panel"><div class="empty">⚠ ${esc(o.error)}</div></div>` : ''}
+    ${groups.map(([g, l]) => `<div class="panel"><h2>${esc(g)} <span class="count">${l.filter((c) => c.ok).length}/${l.length}</span></h2><div class="feed">${l.map(row).join('')}</div></div>`).join('')}
+    <div class="panel"><h2>Ce que chacun peut régler dans son profil</h2><div class="ob-help">
+      <p>Ton profil est dans <code>~/.claude/pr-autoreview/profile.json</code> (écrit par <code>./setup.sh</code>, relançable à volonté). L’équipe est dans <code>team.json</code>, partagé dans le repo.</p>
+      <ul>
+        <li><code>autoReview</code> — brutal review <b>postée automatiquement</b> sur les nouvelles PR des autres. Off par défaut : une seule personne de l’équipe doit l’activer, sinon chaque PR reçoit une review par laptop.</li>
+        <li><code>slack</code> — tri Slack toutes les 10 min en semaine (false pour le couper).</li>
+        <li><code>slackUserId</code> — ton ID Slack (sinon Claude le cherche par ton nom à chaque tri).</li>
+        <li><code>email</code> — l’email de ton compte Atlassian, pour le token Jira.</li>
+        <li><code>repoPath</code> — si ton clone n’est pas dans <code>~/HiveBrite/hivebrite-mobile</code>.</li>
+      </ul>
+      <p class="muted small">Après un changement de profil : <code>./install.sh</code> pour redémarrer le service.</p>
+    </div></div>`;
+}
+
 // ---- chrome --------------------------------------------------------------------------
 function renderChrome() {
   const today = S.sessions.filter((s) => new Date(s.started_at) >= startOfDay()).reduce((a, s) => a + (s.cost_usd ?? 0), 0);
@@ -1483,16 +1526,22 @@ function renderChrome() {
   if (S.jira.error && !S.jira.running) parts.push(`⚠ Jira : ${esc(S.jira.error)}`);
   if (sync?.errors.length) parts.push(`⚠ ${sync.errors.map(esc).join(' · ')}`);
   if (sync?.at && Date.now() - new Date(sync.at) > 15 * 60_000) parts.push(`⚠ Dernier sync GitHub il y a ${ago(sync.at)} — clique « ⟳ Actualiser »`);
+  const missing = S.onboarding?.missing ?? 0;
+  if (missing && pageFromHash() !== 'onboarding') parts.unshift(`⚠ ${missing} étape${missing > 1 ? 's' : ''} d’installation à finir — <a href="#onboarding">Onboarding →</a>`);
   $('#banner').innerHTML = parts.join('<br>');
   const blocked = S.sessions.filter((s) => s.state === 'blocked').length;
-  document.title = blocked ? `(${blocked}) Eric's AI Dashboard` : "Eric's AI Dashboard";
+  const first = S.profile?.firstName;
+  const brand = first ? `${first}'s AI Dashboard` : 'AI Dashboard';
+  document.title = blocked ? `(${blocked}) ${brand}` : brand;
+  $('#brandName').textContent = first ? `${first}'s AI` : 'AI';
+  $('#brandLogo').textContent = (first ?? '·')[0].toUpperCase();
 }
 
 // ---- per-page refresh ---------------------------------------------------------------
 // Which sources each page shows (mirrors SCOPES on the server) and how old each one is.
 const PAGE_SOURCES = {
   standup: ['github', 'jira'], mine: ['github'], ideas: [], atelier: ['github'], fleet: [], home: ['github', 'jira', 'slack'], tasks: ['github', 'jira'], jira: ['jira'], epics: ['jira'], reviews: ['github'], radar: ['github'],
-  brutal: ['github'], slack: ['slack'], sessions: [], usage: ['usage'], stack: [], data: ['usage'],
+  brutal: ['github'], slack: ['slack'], sessions: [], usage: ['usage'], stack: [], data: ['usage'], onboarding: [],
 };
 const SOURCE_LABEL = { github: 'GitHub', jira: 'Jira', slack: 'Slack', usage: 'Transcripts' };
 const STALE_MS = { github: 10 * 60_000, jira: 45 * 60_000, slack: 60 * 60_000, usage: 15 * 60_000 };
@@ -1541,6 +1590,7 @@ const PAGE_FN = {
   reviews: [() => renderReviews(), ['reviews', 'autoReview', 'team']], radar: [() => renderRadar(), ['autoReview', 'sessions', 'reviewHistory', 'events']],
   brutal: [() => renderBrutal(), ['reviewHistory']], slack: [() => renderSlack(), ['slack']], sessions: [() => renderSessions(), ['sessions']],
   usage: [() => RENDER.usage(), []], stack: [() => renderStack(), ['stack', 'tasks', 'reviews']], data: [() => renderData(), ['events', 'db']],
+  onboarding: [() => renderOnboarding(), ['onboarding', 'profile']],
 };
 const stale = new Set(Object.keys(PAGE_FN));
 function renderCounts() {
@@ -1556,6 +1606,7 @@ function renderCounts() {
   n('#c-ideas', (S.ideas?.ideas ?? []).filter((x) => x.status === 'new').length);
   n('#c-fleet', (S.fleet?.sessions ?? []).filter((x) => x.status === 'working' || x.status === 'input').length);
   n('#c-home', actionItems().filter((i) => i.w <= 1).length);
+  n('#c-onboarding', S.onboarding?.missing ?? 0);
   const live = S.sessions.filter((x) => x.chore === 'auto-review' && ACTIVE.includes(x.state));
   $('#radarDot').className = `dot ${live.length ? 'live' : S.autoReview?.enabled ? 'ok' : ''}`;
   if (S.stack) $('#stackDot').className = `dot ${S.stack.busy ? 'warn' : S.stack.running ? 'ok' : ''}`;
@@ -1630,6 +1681,9 @@ document.addEventListener('click', async (e) => {
     if (b.dataset.stackBranch) { await post('/api/stack/switch', { branch: b.dataset.stackBranch }); location.hash = 'stack'; return; }
     if (b.dataset.stackPr) { await post('/api/stack/switch', { pr: b.dataset.stackPr }); location.hash = 'stack'; return; }
     if (b.id === 'customBtn') return openChore({ kind: 'custom', chore: 'custom' });
+    if (b.id === 'obCheck') { await post('/api/onboarding/check'); return toast('Vérification en cours (~40 s, les connecteurs sont lents)'); }
+    if (b.dataset.obfix) { await post('/api/onboarding/fix', { key: b.dataset.obfix }); return toast('Ouvert dans un terminal — puis « Re-vérifier »'); }
+    if (b.dataset.copy) { await navigator.clipboard.writeText(b.dataset.copy); return toast('Copié ✓'); }
     if (b.id === 'radarCheck') return refreshPage();
     if (b.id === 'standupBtn') { location.hash = 'standup'; return; }
     if (b.id === 'standupGen' || b.id === 'standupGenOpus') { await post('/api/standup', b.id === 'standupGenOpus' ? { model: 'opus' } : {}); return toast('Stand-up en cours d’écriture (~30 s)'); }
@@ -1663,6 +1717,8 @@ document.addEventListener('keydown', (e) => {
 // ---- live --------------------------------------------------------------------------
 // Last state kept in the browser: a reload paints instantly, then the stream catches up.
 let saveTimer;
+let obRouted = false;
+const routeOnboarding = () => { if (obRouted || !S?.onboarding?.checks?.length) return; obRouted = true; if (S.onboarding.missing && !location.hash) location.hash = 'onboarding'; };
 const saveState = () => { clearTimeout(saveTimer); saveTimer = setTimeout(() => store.set('lastState', S), 3000); };
 let pendingChanged = null;
 function apply(changed) {
@@ -1679,12 +1735,14 @@ function connect() {
     if (!stackLog.length && S.stack?.log) stackLog = S.stack.log;
     saveState();
     apply(Object.keys(S));
+    routeOnboarding();
   });
   es.addEventListener('patch', (e) => {
     const p = JSON.parse(e.data);
     Object.assign(S, p);
     saveState();
     apply(Object.keys(p));
+    if (p.onboarding) routeOnboarding();
   });
   es.addEventListener('stacklog', (e) => { stackLog.push(JSON.parse(e.data)); if (stackLog.length > 400) stackLog = stackLog.slice(-400); renderStackLog(); });
   es.onerror = () => { $('#syncInfo').textContent = 'déconnecté du serveur…'; };

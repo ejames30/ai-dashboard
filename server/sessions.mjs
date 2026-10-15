@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { config } from './config.mjs';
 import { db, logEvent, update, upsert } from './db.mjs';
 import { gh, sh } from './sh.mjs';
 
@@ -108,7 +109,7 @@ async function rcUrl(id) {
 function notify(s, state) {
   const title = state === 'blocked' ? 'Claude attend ta réponse' : 'Session terminée';
   const msg = `${s.name}`.replace(/["\\]/g, '');
-  sh('osascript', ['-e', `display notification "${msg}" with title "Eric's AI Dashboard" subtitle "${title}" sound name "Glass"`]).catch(() => {});
+  sh('osascript', ['-e', `display notification "${msg}" with title "${config.firstName}'s AI Dashboard" subtitle "${title}" sound name "Glass"`]).catch(() => {});
 }
 
 // `claude agents` is a process spawn: one call serves everyone for a few seconds.

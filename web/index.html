@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Eric's AI Dashboard</title>
+<title>AI Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="/style.css">
@@ -13,7 +13,7 @@
 <body>
 <div class="app">
   <aside class="side">
-    <div class="brand"><span class="logo">E</span><div><b>Eric's AI</b><small>Dashboard</small></div></div>
+    <div class="brand"><span class="logo" id="brandLogo">·</span><div><b id="brandName">AI</b><small>Dashboard</small></div></div>
     <nav id="nav">
       <a data-page="home"><i>◎</i>Aujourd'hui <span class="count hot" id="c-home"></span></a>
       <div class="navlabel">Mon travail</div>
@@ -35,6 +35,7 @@
       <a data-page="usage"><i>$</i>Conso IA</a>
       <a data-page="stack"><i>⬢</i>Stack local <span class="dot" id="stackDot"></span></a>
       <a data-page="data"><i>▦</i>Journal &amp; base</a>
+      <a data-page="onboarding"><i>✓</i>Onboarding <span class="count hot" id="c-onboarding"></span></a>
     </nav>
     <div class="side-foot">
       <div class="costbox"><small>Coût est. aujourd'hui</small><b id="costToday">–</b></div>
@@ -55,6 +56,7 @@
     <div id="banner"></div>
     <main>
       <section class="page" id="page-home"></section>
+      <section class="page" id="page-onboarding"></section>
       <section class="page" id="page-mine"><div class="filters" id="f-mine"></div><div id="r-mine"></div></section>
       <section class="page" id="page-tasks"><div class="filters" id="f-tasks"></div><div id="r-tasks"></div></section>
       <section class="page" id="page-jira"><div class="filters" id="f-jira"></div><div id="r-jira"></div></section>

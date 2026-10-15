@@ -1,4 +1,4 @@
-// Eric's AI Dashboard — local cockpit: my tasks + their next action, teammates' PRs to review,
+// AI Dashboard — local cockpit: my tasks + their next action, teammates' PRs to review,
 // every Claude session I start, and the local stack. 127.0.0.1 only, zero dependencies.
 
 process.removeAllListeners('warning'); // node:sqlite's "experimental" notice
@@ -24,7 +24,10 @@ import { PLAN_TOOLS, launch, listSessions, liveAgents, slim, openInTerminal, ope
 import { onStackLog, refreshStack, stackStatus, startStack, stopStack, switchStack } from './stack.mjs';
 import { reviewWorktree, scratchWorktree, taskWorktree } from './worktrees.mjs';
 import { sh } from './sh.mjs';
+import { checkOnboarding, fixCommand, onboardingState } from './onboarding.mjs';
 
+// Session name prefix: "eric-ai-MO-123-…", so the Fleet tells whose dashboard started it.
+const SLUG = String(config.firstName ?? 'me').normalize('NFD').replace(/[^A-Za-z0-9]/g, '').toLowerCase() || 'me';
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '../web');
 
 // ---- model -----------------------------------------------------------------
@@ -126,6 +129,7 @@ async function state() {
   const sessions = sessionsNow();
   return {
     me: config.me,
+    profile: { login: config.me, name: config.name, firstName: config.firstName },
     tasks: cached('tasks', ['issues', 'prs', 'sessions'], () => buildTasks(sessions)),
     reviews: cached('reviews', ['prs', 'sessions'], () => buildReviews(sessions)),
     reviewHistory: cached('reviewHistory', ['prs', 'sessions'], () => buildReviewHistory(sessions)),
@@ -143,6 +147,7 @@ async function state() {
     ideas: cached('ideas', ['ideas'], ideasState),
     graph: cached('graph', ['graph', 'worktrees'], graphState),
     fleet: cached('fleet', ['fleetLive'], () => fleetSnap),
+    onboarding: cached('onboarding', ['kv:onboarding'], onboardingState),
     chores: CHORE_LIST,
     models: MODELS,
     efforts: EFFORTS,
@@ -210,11 +215,12 @@ const SOURCES = {
   stack: async () => {},
   graph: () => scanWorktrees(),
   fleet: () => scanWorktrees().then(fleetTick),
+  onboarding: () => checkOnboarding(),
 };
 const SCOPES = {
   home: ['github', 'jira', 'slack', 'sessions'], mine: ['github', 'sessions'], tasks: ['github', 'jira', 'sessions'], jira: ['jira'], epics: ['jira', 'sessions'],
   reviews: ['github', 'sessions'], radar: ['radar', 'sessions'], brutal: ['github', 'sessions'], slack: ['slack'],
-  sessions: ['sessions'], usage: ['usage'], stack: ['stack'], data: ['usage'], atelier: ['graph', 'sessions', 'github'], fleet: ['fleet', 'usage'],
+  sessions: ['sessions'], usage: ['usage'], stack: ['stack'], data: ['usage'], atelier: ['graph', 'sessions', 'github'], fleet: ['fleet', 'usage'], onboarding: ['onboarding'],
 };
 async function refresh(scope) {
   const names = SCOPES[scope] ?? Object.keys(SOURCES);
@@ -268,6 +274,9 @@ const wtTick = () => scanWorktrees().then(pushState).catch((e) => console.error(
 setInterval(wtTick, 2 * 60_000);
 wtTick();
 sync();
+const onboardingTick = () => checkOnboarding().finally(pushState);
+setInterval(onboardingTick, 60 * 60_000);
+onboardingTick();
 
 // Read-only connection for the SQL console: it can't write, whatever the query says.
 const ro = new DatabaseSync(join(config.dataDir, 'ai-dashboard.db'), { readOnly: true });
@@ -322,7 +331,7 @@ async function startSession(body) {
   const cwd = d.here ? d.here : d.pr ? await reviewWorktree(repo, d.pr) : d.task ? await taskWorktree(repo, d.task) : await scratchWorktree(repo, d.tasks ? 'batch' : d.epic ? `plan-${d.epic.key}` : d.idea ? `idea-${d.idea.id}` : 'custom');
   const label = d.here ? `${d.here.split('/').pop()}${d.task ? `-${d.task.key}` : ''}` : d.pr ? `review-${d.pr.number}` : d.task ? d.task.key : d.tasks ? `${d.tasks.length}-tickets` : d.epic ? d.epic.key : d.idea ? `idea-${d.idea.id}` : 'custom';
   return launch({
-    name: `eric-ai-${label}-${d.chore.key}`.slice(0, 60),
+    name: `${SLUG}-ai-${label}-${d.chore.key}`.slice(0, 60),
     cwd, model, effort, prompt,
     readOnly: !!d.pr,
     allow: d.epic ? PLAN_TOOLS : null,
@@ -339,7 +348,7 @@ async function startAutoReview(pr) {
   const repo = repoBySlug(pr.repo);
   const c = AUTO_REVIEW_CHORE;
   return launch({
-    name: `eric-ai-review-${pr.number}-auto-review`,
+    name: `${SLUG}-ai-review-${pr.number}-auto-review`,
     cwd: await reviewWorktree(repo, pr), model: c.model, effort: c.effort, prompt: c.prompt(pr),
     readOnly: true,
     row: { chore: c.key, task: null, tasks: null, repo: repo.slug, pr: pr.number, title: pr.title, head_sha: pr.head_sha, author: pr.author },
@@ -470,6 +479,13 @@ createServer(async (req, res) => {
         await openTerminalAt(body.path, body.claude ? 'claude' : null);
         return json(res, 200, { ok: true });
       }
+      if (pathname === '/api/onboarding/check') { onboardingTick(); pushState(); return json(res, 202, { ok: true }); }
+      if (pathname === '/api/onboarding/fix') {
+        const f = fixCommand(String(body.key ?? ''));
+        if (!f) throw httpError(404, 'pas de commande pour ce check');
+        await openTerminalAt(f.cwd, f.cmd, f.title);
+        return json(res, 200, { ok: true });
+      }
       if (pathname === '/api/refresh') return json(res, 200, { results: await refresh(String(body.scope ?? '')) });
       if (pathname === '/api/sync') { resetJiraToken(); await sync({ force: true }); return json(res, 200, { ok: true }); }
       if (pathname === '/api/sessions') {
@@ -508,4 +524,4 @@ createServer(async (req, res) => {
     console.error(e);
     json(res, e.code && Number.isInteger(e.code) ? e.code : 500, { error: e.message });
   }
-}).listen(config.port, '127.0.0.1', () => console.log(`Eric's AI Dashboard → http://localhost:${config.port}`));
+}).listen(config.port, '127.0.0.1', () => console.log(`${config.firstName}'s AI Dashboard → http://localhost:${config.port}`));

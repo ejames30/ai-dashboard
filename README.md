@@ -1,6 +1,14 @@
-# Eric's AI Dashboard
+# AI Dashboard — mobile team
 
-Local dev cockpit on `http://localhost:4317` (127.0.0.1 only, zero dependencies, Node 24 + built-in SQLite). Inspired by a teammate's Task Goblin.
+Each person's local dev cockpit on `http://localhost:4317` (127.0.0.1 only, zero dependencies, Node 24 + built-in SQLite). Inspired by a teammate's Task Goblin.
+
+**Install (2 min, macOS):**
+
+```bash
+git clone https://github.com/ejames30/ai-dashboard.git ~/ai-dashboard && cd ~/ai-dashboard && ./setup.sh
+```
+
+Then follow the **Onboarding** page that opens (http://localhost:4317/#onboarding) — details in [Setup](#setup-anyone-on-the-mobile-team).
 
 | Tab | What |
 | --- | --- |
@@ -26,13 +34,46 @@ Chores (`server/chores.mjs`), first match wins: conflicts → failing checks →
 
 A teammate's diff is untrusted. The review session runs in `dontAsk` mode with only `Read/Grep/Glob`, `git diff/log/show/blame`, `gh pr view/diff` — no write, no post. It ends with a JSON block; the server creates the pending review.
 
-## Setup
+## Setup (anyone on the mobile team)
 
 ```bash
-./install.sh                     # (re)load the launchd agent com.eric.ai-dashboard (KeepAlive)
-tail -f ~/Library/Logs/ai-dashboard.log
-# Jira (optional): token from id.atlassian.com, then
-security add-generic-password -s ai-dashboard-jira -a eric@hivebrite.com -w <token>
+git clone https://github.com/ejames30/ai-dashboard.git ~/ai-dashboard && cd ~/ai-dashboard
+./setup.sh
 ```
 
-Data: `~/.claude/pr-autoreview/ai-dashboard.db`. Repos, sizes, Jira JQL, stack command: `server/config.mjs`.
+`setup.sh` is guided and can be rerun any time. It:
+
+1. installs what's missing (asks first): Node 24, `gh`, Claude Code, pnpm;
+2. logs you into `gh` and `claude` if needed;
+3. finds you in **`team.json`** by your GitHub login (Eric, Malek, Jérémie, Tobiasz, Thomas) and writes your **profile** to `~/.claude/pr-autoreview/profile.json`;
+4. clones `Hivebrite/hivebrite-mobile` to `~/HiveBrite/hivebrite-mobile` if it isn't there;
+5. installs the launchd service (`com.hivebrite.ai-dashboard`, KeepAlive) and opens **http://localhost:4317/#onboarding**.
+
+The **Onboarding** page checks everything for real — tools logged in, repo access, the clone, and the **claude.ai connectors the dashboard calls (Atlassian, Slack)** via `claude mcp list` — and gives each missing step its fix: a link, or a command it opens in your terminal. A banner points there as long as a required step is missing. Rechecked hourly and on « Re-vérifier ».
+
+Connector missing or « Needs authentication »: claude.ai → Settings → Connectors, or `claude` then `/mcp` → *claude.ai Atlassian* / *claude.ai Slack* → Authenticate.
+
+### Your profile
+
+`~/.claude/pr-autoreview/profile.json` — personal, never in the repo. After editing it, `./install.sh` restarts the service.
+
+| Key | Default | What |
+| --- | --- | --- |
+| `login` | from setup | your GitHub login (must be in `team.json`) |
+| `email` | from setup | your Atlassian email, for the Jira token |
+| `autoReview` | `false` | post brutal reviews on teammates' new PRs automatically. **Only one person should turn it on**, or every PR gets one review per laptop |
+| `slack` | `true` | Slack triage every 10 min on weekdays |
+| `slackUserId` | — | your Slack ID (else the triage looks you up by name) |
+| `repoPath` | `~/HiveBrite/hivebrite-mobile` | where your clone lives |
+
+New teammate: add them to `team.json` (`login`, `name`, `firstName`), commit, they run `./setup.sh`.
+
+### Jira token (optional, recommended)
+
+Without it Jira goes through the Atlassian connector (~40 s, a few cents per sync). With it, sync is free and instant:
+
+```bash
+security add-generic-password -s ai-dashboard-jira -a <you>@hivebrite.com -w <token from id.atlassian.com>
+```
+
+Logs: `tail -f ~/Library/Logs/ai-dashboard.log`. Data: `~/.claude/pr-autoreview/ai-dashboard.db`. Repos, sizes, Jira JQL, Slack channels, stack command: `server/config.mjs`.

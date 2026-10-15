@@ -30,7 +30,7 @@ async function context(repo) {
   return { log: log.split('\n').slice(0, 80).join('\n'), ci, past, cost };
 }
 
-const PROMPT = (repo, c, n) => `You run the innovation corner of ${config.slack.me}'s dashboard. He is a mobile engineer on Hivebrite's React Native + Expo app (repo ${repo.slug}, you are in its main checkout, read-only). Propose ${n} NEW ideas that would make the team's life better or the app better.
+const PROMPT = (repo, c, n) => `You run the innovation corner on the dashboard of ${config.slack.me}, a mobile engineer on Hivebrite's React Native + Expo app (repo ${repo.slug}, you are in its main checkout, read-only). Propose ${n} NEW ideas that would make the team's life better or the app better.
 
 Mix the categories (${Object.entries(CATEGORIES).map(([k, v]) => `${k} = ${v}`).join(', ')}) — at least one "feature", one "devxp" and one "ci".
 Ground every idea in something real: a file/pattern in this repo (read AGENTS.md files, package.json, .github/workflows, features/), the recent commits, the CI stats below, or a recent ecosystem change (Expo, React Native, EAS, GitHub Actions, Claude Code — use WebSearch for news from the last weeks). No generic advice ("add more tests"): each idea is specific, doable, and says what it unlocks.

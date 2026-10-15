@@ -18,18 +18,19 @@ My Jira tickets in progress: ${issues.map((i) => `${i.key} ${i.summary}`).join('
 
 function prompt(sinceIso) {
   const c = config.slack;
-  return `You triage Slack for ${c.me} (Slack user ${c.userId}), ${c.role}. Use ONLY the read tools. Look at messages since ${sinceIso}:
-1. DMs and group DMs to him; 2. messages mentioning him (search his user id ${c.userId}) or his groups ${c.groups.join(', ')};
-3. replies in threads he started or replied in; 4. in channels he is a member of (slack_list_user_channels), mainly ${c.channels.join(', ')}: anything asking the mobile team / him something, about his PRs or tickets below, or a prod incident / release / store issue touching mobile.
+  const who = c.userId ? `Slack user ${c.userId}` : `find their Slack user id first with slack_search_users "${c.me}"`;
+  return `You triage Slack for ${c.me} (${who}), ${c.role}. Use ONLY the read tools. Look at messages since ${sinceIso}:
+1. DMs and group DMs to them; 2. messages mentioning them (search their user id) or their groups ${c.groups.join(', ')};
+3. replies in threads they started or replied in; 4. in channels they are a member of (slack_list_user_channels), mainly ${c.channels.join(', ')}: anything asking the mobile team / them something, about their PRs or tickets below, or a prod incident / release / store issue touching mobile.
 ${contextLines()}
 
-NOISE — drop it: bots and CI/GitHub/Jira notifications (unless a human asks him something in them), social chatter, announcements needing no action, anything he already answered or reacted to, his own messages.
+NOISE — drop it: bots and CI/GitHub/Jira notifications (unless a human asks them something in them), social chatter, announcements needing no action, anything they already answered or reacted to, their own messages.
 Read a thread when needed to know whether it is still open. Keep at most 25 items.
 Output ONLY a JSON array, no prose, no fences. Each item:
 {"id": "<channelId>-<message ts>", "ts": "<ISO time>", "channel": "#name or DM name", "author": "display name", "text": "<original text, max 300 chars>",
- "summary": "<French, one line>", "why": "<French: why it matters to him>", "action": "<French: what he should do, or empty>",
+ "summary": "<French, one line>", "why": "<French: why it matters to them>", "action": "<French: what they should do, or empty>",
  "priority": "urgent" | "important" | "fyi", "kind": "dm" | "mention" | "thread" | "team" | "incident", "permalink": "<slack permalink if known>"}
-urgent = someone blocked on him / prod incident / direct question waiting > 2h. Empty array if nothing matters.`;
+urgent = someone blocked on them / prod incident / direct question waiting > 2h. Empty array if nothing matters.`;
 }
 
 let running = false;

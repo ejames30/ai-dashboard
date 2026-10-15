@@ -12,6 +12,7 @@ let token; // cached once looked up; null = looked, none
 
 async function getToken() {
   if (token !== undefined) return token;
+  if (!config.email) return (token = null); // REST auth is email + token
   try {
     token = (await sh('security', ['find-generic-password', '-s', config.jira.keychainService, '-w'])).trim() || null;
   } catch {
