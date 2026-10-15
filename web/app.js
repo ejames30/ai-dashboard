@@ -1490,6 +1490,30 @@ function renderStackLog() {
 }
 
 // ---- repos ---------------------------------------------------------------------------
+// Catalog of the org's repos, fetched once when the Repos page opens (server caches it 6 h).
+let CAT = null, catQ = '', catLoading = false;
+async function loadCatalog(force = false) {
+  if (catLoading || (CAT && !force)) return;
+  catLoading = true; $('#repoCat') && ($('#repoCat').innerHTML = catHtml());
+  try { const r = await fetch(`/api/repos/catalog${force ? '?force=1' : ''}`); const d = await r.json(); if (!r.ok) throw new Error(d.error); CAT = d; }
+  catch (e) { toast(`Liste des repos : ${e.message}`); } finally { catLoading = false; if ($('#repoCat')) $('#repoCat').innerHTML = catHtml(); }
+}
+function catHtml() {
+  if (!CAT) return `<div class="empty" style="padding:16px">${catLoading ? 'Chargement des repos Hivebrite et de l’activité de l’équipe (~10 s)…' : ''}</div>`;
+  const tracked = new Set((S.repos ?? []).map((r) => r.slug));
+  const q = catQ.trim().toLowerCase();
+  const avail = CAT.repos.filter((r) => !tracked.has(r.slug));
+  const list = q ? avail.filter((r) => (!r.generated || q.includes('sdk')) && `${r.slug} ${r.description} ${r.language ?? ''}`.toLowerCase().includes(q)).slice(0, 40)
+    : avail.filter((r) => r.teamPrs >= 2);
+  const row = (r) => `<div class="cat-row"><div class="ob-body"><div class="t"><a href="https://github.com/${esc(r.slug)}" target="_blank" rel="noopener">${esc(r.slug.split('/')[1])}</a>
+      ${r.language ? `<span class="badge">${esc(r.language)}</span>` : ''}${r.teamPrs ? ` <span class="badge pink" title="PR ouvertes par l’équipe ces 60 derniers jours">${r.teamPrs} PR équipe · 60 j</span>` : ''}</div>
+      <div class="s">${esc(r.description || '—')} · push il y a ${ago(r.pushedAt)}</div></div>
+    <div class="row-actions"><button class="chore" data-catadd="${esc(r.slug)}">＋ Ajouter</button></div></div>`;
+  return `${q ? '' : '<div class="cat-note">Suggérés : les repos où l’équipe a ouvert des PR ces 60 derniers jours. Tape pour chercher parmi les ' + avail.length + ' autres.</div>'}
+    <div class="feed">${list.map(row).join('') || `<div class="empty" style="padding:16px">${q ? 'Aucun repo ne correspond.' : 'Tu suis déjà tous les repos actifs de l’équipe 👌'}</div>`}</div>`;
+}
+document.addEventListener('input', (e) => { if (e.target.id === 'catQ') { catQ = e.target.value; $('#repoCat').innerHTML = catHtml(); } });
+
 const teamName = (login) => S.team.find((m) => m.login === login)?.name ?? login;
 function renderRepos() {
   const repos = S.repos ?? [];
@@ -1498,6 +1522,7 @@ function renderRepos() {
   const all = scopes.filter(([, s]) => s === 'all').map(([l]) => teamName(l));
   const limited = scopes.filter(([, s]) => s !== 'all');
   const el = $('#page-repos');
+  loadCatalog();
   if (el.contains(document.activeElement) && document.activeElement.matches('input')) return;
   el.innerHTML = `
     <div class="panel"><h2>Repos suivis <span class="count">${repos.length}</span></h2><div class="feed">${repos.map((r) => `
@@ -1509,11 +1534,15 @@ function renderRepos() {
           <label class="repo-radar" title="Le radar poste une brutal review sur les nouvelles PR des coéquipiers dans ce repo"><input type="checkbox" data-reporadar="${esc(r.slug)}" ${r.radar ? 'checked' : ''}> Radar</label>
           ${r.mobile ? '' : `<button class="ghost" data-reporm="${esc(r.slug)}" title="Ne plus suivre (le clone reste sur le disque)">✕</button>`}
         </div></div>`).join('')}</div>
-      <div class="repo-add">
+      </div>
+    <div class="panel"><h2>Ajouter un repo Hivebrite <span class="spacer"></span><button class="ghost" id="catRefresh" title="Recharger la liste depuis GitHub">⟳</button></h2>
+      <div class="repo-add"><input id="catQ" type="search" placeholder="Chercher un repo (nom, description, langage)…" autocomplete="off" value="${esc(catQ)}"></div>
+      <div id="repoCat">${catHtml()}</div>
+      <details class="repo-manual"><summary>Autre repo ou chemin de clone personnalisé</summary><div class="repo-add">
         <input id="repoSlug" placeholder="owner/repo — ex. Hivebrite/alumni_connect" autocomplete="off">
         <input id="repoPath" placeholder="chemin du clone (défaut : ~/HiveBrite/<repo>)" autocomplete="off">
         <button class="primary" id="repoAdd">Ajouter</button>
-      </div></div>
+      </div></details></div>
     <div class="panel"><h2>Ce que le radar scanne</h2><div class="ob-help">
       <p>${a.enabled ? 'Le radar poste une brutal review sur chaque <b>nouvelle</b> PR prête d’un coéquipier, uniquement dans les repos cochés <b>Radar</b> ci-dessus.' : 'Le radar est <b>coupé</b> dans ton profil (<code>"autoReview": false</code>).'} À l’activation sur un repo, ses PR déjà ouvertes sont ignorées (pas de review du backlog).</p>
       <ul>
@@ -1748,6 +1777,8 @@ document.addEventListener('click', async (e) => {
     if (b.dataset.stackPr) { await post('/api/stack/switch', { pr: b.dataset.stackPr }); location.hash = 'stack'; return; }
     if (b.id === 'customBtn') return openChore({ kind: 'custom', chore: 'custom' });
     if (b.id === 'repoAdd') { const slug = $('#repoSlug').value.trim(); if (!slug) return toast('owner/repo d’abord'); b.disabled = true; try { await post('/api/repos', { op: 'add', slug, path: $('#repoPath').value.trim() }); $('#repoSlug').value = ''; $('#repoPath').value = ''; document.activeElement.blur(); toast('Repo ajouté ✓ — synchro GitHub en cours'); } finally { b.disabled = false; } return; }
+    if (b.dataset.catadd) { b.disabled = true; b.textContent = 'Ajout…'; try { await post('/api/repos', { op: 'add', slug: b.dataset.catadd }); toast(`${b.dataset.catadd.split('/')[1]} ajouté ✓ — clique « Cloner » s’il n’est pas sur ton Mac`); } catch (err) { toast(err.message); b.disabled = false; b.textContent = '＋ Ajouter'; } return; }
+    if (b.id === 'catRefresh') { CAT = null; return loadCatalog(true); }
     if (b.dataset.repoclone) { await post('/api/repos', { op: 'clone', slug: b.dataset.repoclone }); return toast('Clone lancé — ça peut prendre quelques minutes'); }
     if (b.dataset.reporm) { if (!confirm(`Ne plus suivre ${b.dataset.reporm} ? (le clone reste sur le disque)`)) return; await post('/api/repos', { op: 'remove', slug: b.dataset.reporm }); return toast('Repo retiré'); }
     if (b.id === 'brAdd') { const t = $('#brNew').value.trim(); if (!t) return toast('Écris la règle d’abord'); await post('/api/brutal-rules', { op: 'add', text: t }); $('#brNew').value = ''; $('#brNew').blur(); return toast('Règle ajoutée ✓ — prochaines reviews'); }

@@ -25,6 +25,7 @@ import { PLAN_TOOLS, launch, listSessions, liveAgents, slim, openInTerminal, ope
 import { onStackLog, refreshStack, stackStatus, startStack, stopStack, switchStack } from './stack.mjs';
 import { reviewWorktree, scratchWorktree, taskWorktree } from './worktrees.mjs';
 import { sh } from './sh.mjs';
+import { repoCatalog } from './repocatalog.mjs';
 import { checkOnboarding, fixCommand, onboardingState } from './onboarding.mjs';
 
 // Session name prefix: "eric-ai-MO-123-…", so the Fleet tells whose dashboard started it.
@@ -436,6 +437,7 @@ createServer(async (req, res) => {
       if (!f) throw httpError(404, 'session not found');
       return json(res, 200, { session: f, items: transcriptFile(fleetFile(ft[1])) });
     }
+    if (req.method === 'GET' && pathname === '/api/repos/catalog') return json(res, 200, await repoCatalog({ force: searchParams.has('force') }));
     if (req.method === 'GET' && pathname === '/api/usage') return json(res, 200, usageStats(Object.fromEntries(searchParams)));
     if (req.method === 'GET' && pathname === '/api/chore') {
       const d = choreDefaults(Object.fromEntries(searchParams));

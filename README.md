@@ -32,7 +32,7 @@ Chores (`server/chores.mjs`), first match wins: conflicts → failing checks →
 
 ## Repos & radar scope
 
-`hivebrite-mobile` is always tracked (it carries the local stack). Add any other repo from the **Repos** page: `owner/repo` (default branch read from GitHub), clone path (default `~/HiveBrite/<repo>`), a **Cloner** button if it isn't on disk, and a **Radar** checkbox per repo. Saved in your profile (`repos`), applied live.
+`hivebrite-mobile` is always tracked (it carries the local stack). Add any other repo from the **Repos** page: one click on a suggestion (the Hivebrite repos where the team opened PRs in the last 60 days), a search over every org repo, or a typed `owner/repo` (default branch read from GitHub), clone path (default `~/HiveBrite/<repo>`), a **Cloner** button if it isn't on disk, and a **Radar** checkbox per repo. Saved in your profile (`repos`), applied live.
 
 The radar only reviews **new** ready PRs from teammates, in your repos with Radar on, and per person within their `radarRepos` from `team.json`:
 
