@@ -1,5 +1,5 @@
 import { config } from './config.mjs';
-import { bump, db, upsert } from './db.mjs';
+import { bump, db, kv, upsert } from './db.mjs';
 import { ghGraphql } from './sh.mjs';
 
 const PR_FIELDS = `
@@ -49,7 +49,16 @@ function row(repo, kind, pr, requested) {
 }
 
 export async function syncGithub() {
-  for (const { slug } of config.repos) {
+  const errors = [];
+  for (const { slug } of [...config.repos]) {
+    try { await syncRepo(slug); kv.set('repoSync', { ...(kv.get('repoSync') ?? {}), [slug]: { at: new Date().toISOString() } }); }
+    catch (e) { errors.push(`${slug} : ${e.message}`); kv.set('repoSync', { ...(kv.get('repoSync') ?? {}), [slug]: { ...(kv.get('repoSync') ?? {})[slug], error: e.message.slice(0, 300), errorAt: new Date().toISOString() } }); }
+  }
+  if (errors.length) throw new Error(errors.join(' · '));
+}
+
+async function syncRepo(slug) {
+  {
     const base = `repo:${slug} is:pr is:open`;
     // Teammates' drafts too: I want to see the mobile team's work in progress, not only what's ready.
     const [mine, others, teamDrafts, requested] = await Promise.all([

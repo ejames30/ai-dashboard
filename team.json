@@ -1,10 +1,10 @@
 {
-  "_doc": "The mobile team. Each person's dashboard shows the others as teammates. setup.sh picks you from here by your GitHub login; your own settings live in ~/.claude/pr-autoreview/profile.json.",
+  "_doc": "The mobile team. Each person's dashboard shows the others as teammates. setup.sh picks you from here by your GitHub login; your own settings live in ~/.claude/pr-autoreview/profile.json. radarRepos: the repos where the radar reviews this person's PRs (default: all of the viewer's repos).",
   "members": [
     { "login": "ejames30", "name": "Eric James", "firstName": "Eric", "slackUserId": "U03JRNL7WJV" },
     { "login": "malekhassani", "name": "Malek Hassani", "firstName": "Malek" },
     { "login": "MarshMallowFR", "name": "Jérémie Aubeau", "firstName": "Jérémie" },
-    { "login": "tobiasz", "name": "Tobiasz Wawrzynczok", "firstName": "Tobiasz" },
-    { "login": "Haerezis", "name": "Thomas Kuntz", "firstName": "Thomas" }
+    { "login": "tobiasz", "name": "Tobiasz Wawrzynczok", "firstName": "Tobiasz", "radarRepos": ["Hivebrite/hivebrite-mobile"] },
+    { "login": "Haerezis", "name": "Thomas Kuntz", "firstName": "Thomas", "radarRepos": ["Hivebrite/hivebrite-mobile"] }
   ]
 }

@@ -86,8 +86,18 @@ const CHECKS = [
     key: 'repo', group: 'Code', label: 'Clone hivebrite-mobile', required: true,
     run: async () => {
       const { path, slug } = config.repos[0];
-      if (!existsSync(join(path, '.git'))) return ko(`rien dans ${path.replace(process.env.HOME, '~')}`, { text: 'Clone le repo à cet endroit (ou mets "repoPath" dans ton profil).', cmd: `mkdir -p ${JSON.stringify(dirname(path))} && gh repo clone ${slug} ${JSON.stringify(path)}` });
+      if (!existsSync(join(path, '.git'))) return ko(`rien dans ${path.replace(process.env.HOME, '~')}`, { text: 'Clone le repo à cet endroit (ou change son chemin sur la page Repos).', cmd: `mkdir -p ${JSON.stringify(dirname(path))} && gh repo clone ${slug} ${JSON.stringify(path)}` });
       return ok(path.replace(process.env.HOME, '~'));
+    },
+  },
+  {
+    key: 'repos', group: 'Code', label: 'Autres repos suivis', required: false,
+    run: async () => {
+      const others = config.repos.slice(1);
+      if (!others.length) return ok('aucun — ajoute-en depuis la page Repos');
+      const missing = others.filter((r) => !existsSync(join(r.path, '.git')));
+      return missing.length ? ko(`pas cloné : ${missing.map((r) => r.slug).join(', ')} — reviews et sessions impossibles dessus`, { text: 'Clone-les depuis la page Repos (bouton « Cloner »).', url: '#repos' })
+        : ok(others.map((r) => r.slug).join(', '));
     },
   },
   {

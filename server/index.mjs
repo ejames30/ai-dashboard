@@ -8,7 +8,8 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { brutalRules, setBrutalRules, AUTO_REVIEW_CHORE, SELF_REVIEW_CHORE, BATCH, CHORES, CUSTOM, EFFORTS, EPIC_PLAN, IDEA, MODELS, REVIEW_CHORE, STANDUP, choreByKey, nextChore } from './chores.mjs';
-import { config, repoBySlug, sizeOf } from './config.mjs';
+import { MOBILE_REPO, config, radarWatches, repoBySlug, repoDefaultPath, saveRepos, sizeOf } from './config.mjs';
+import { existsSync } from 'node:fs';
 import { bump, db, kv, logEvent, update, version } from './db.mjs';
 import { autoReviewState, runAutoReview } from './autoreview.mjs';
 import { syncGithub } from './github.mjs';
@@ -91,7 +92,7 @@ function buildReviews(all = listSessions()) {
       size: sizeOf(pr.additions + pr.deletions),
       session,
       outdated: !!(session?.head_sha && session.head_sha !== pr.head_sha),
-      auto: config.autoReview.authors.includes(pr.author),
+      auto: radarWatches(pr),
       team: config.team.find((m) => m.login === pr.author)?.name ?? null,
     };
   }).sort((a, b) => a.lines - b.lines);
@@ -106,6 +107,51 @@ function buildEpics(all = listSessions()) {
     mine: issues.filter((i) => i.parent_key === e.key).map((i) => ({ key: i.key, summary: i.summary, status: i.status, status_category: i.status_category })),
     plans: sessions.filter((s) => s.epic === e.key).map((s) => ({ id: s.id, state: s.state, started_at: s.started_at, cost_usd: s.cost_usd })),
   })).sort((a, b) => b.mine.length - a.mine.length || (b.updated ?? '').localeCompare(a.updated ?? ''));
+}
+
+/** The Repos page: every tracked repo, its clone, its radar, its last sync. */
+const cloning = new Set();
+function buildRepos() {
+  const synced = kv.get('repoSync') ?? {};
+  return config.repos.map((r) => ({
+    slug: r.slug, path: r.path, base: r.base, radar: r.radar, mobile: r.slug === MOBILE_REPO,
+    cloned: existsSync(join(r.path, '.git')), cloning: cloning.has(r.slug), sync: synced[r.slug] ?? null,
+    open: db.prepare('SELECT COUNT(*) n FROM prs WHERE repo = ? AND closed_at IS NULL').get(r.slug).n,
+  }));
+}
+const repoList = () => config.repos.map(({ slug, path, base, radar }) => ({ slug, path, base, radar }));
+async function reposOp(body) {
+  const slug = String(body.slug ?? '').trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$|\/$/g, '');
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(slug)) throw httpError(400, 'repo attendu sous la forme owner/name');
+  const repo = repoBySlug(slug);
+  if (body.op === 'add') {
+    if (repo) throw httpError(409, `${slug} est déjà suivi`);
+    const info = await sh('gh', ['api', `repos/${slug}`, '--jq', '[.full_name, .default_branch] | @tsv']).catch(() => null);
+    if (!info) throw httpError(404, `${slug} introuvable ou pas d’accès avec ton compte gh`);
+    const [full, base] = info.trim().split('\t');
+    const path = String(body.path ?? '').trim().replace(/^~(?=\/)/, process.env.HOME) || repoDefaultPath(full);
+    saveRepos([...repoList(), { slug: full, path, base, radar: body.radar !== false }]);
+    logEvent('repos', `Repo ajouté : ${full} (${base}) — ${path}`);
+  } else if (!repo) throw httpError(404, `${slug} n’est pas suivi`);
+  else if (body.op === 'radar') {
+    saveRepos(repoList().map((r) => (r.slug === slug ? { ...r, radar: !!body.on } : r)));
+    logEvent('repos', `Radar ${body.on ? 'activé' : 'coupé'} sur ${slug}`);
+  } else if (body.op === 'remove') {
+    if (slug === MOBILE_REPO) throw httpError(400, 'hivebrite-mobile reste toujours suivi');
+    saveRepos(repoList().filter((r) => r.slug !== slug));
+    db.prepare('DELETE FROM prs WHERE repo = ? AND closed_at IS NULL').run(slug); bump('prs');
+    logEvent('repos', `Repo retiré : ${slug} (le clone reste sur le disque)`);
+  } else if (body.op === 'clone') {
+    if (existsSync(join(repo.path, '.git')) || cloning.has(slug)) return;
+    cloning.add(slug); bump('reposCfg');
+    sh('mkdir', ['-p', dirname(repo.path)])
+      .then(() => sh('gh', ['repo', 'clone', slug, repo.path], { timeout: 30 * 60_000 }))
+      .then(() => logEvent('repos', `Clone terminé : ${slug} → ${repo.path}`), (e) => logEvent('repos', `Clone de ${slug} en échec : ${e.message.slice(0, 200)}`))
+      .finally(() => { cloning.delete(slug); bump('reposCfg'); scanWorktrees().catch(() => {}); pushState(); });
+    return;
+  } else throw httpError(400, `op inconnue ${body.op}`);
+  bump('reposCfg');
+  githubNow().catch(() => {}).finally(() => scanWorktrees().catch(() => {}).finally(pushState));
 }
 
 // Static-ish bits, computed once.
@@ -147,6 +193,7 @@ async function state() {
     ideas: cached('ideas', ['ideas'], ideasState),
     graph: cached('graph', ['graph', 'worktrees'], graphState),
     fleet: cached('fleet', ['fleetLive'], () => fleetSnap),
+    repos: cached('repos', ['reposCfg', 'kv:repoSync', 'prs', 'events'], buildRepos),
     brutalRules: cached('brutalRules', ['kv:brutalRules'], brutalRules),
     onboarding: cached('onboarding', ['kv:onboarding'], onboardingState),
     chores: CHORE_LIST,
@@ -480,6 +527,7 @@ createServer(async (req, res) => {
         await openTerminalAt(body.path, body.claude ? 'claude' : null);
         return json(res, 200, { ok: true });
       }
+      if (pathname === '/api/repos') { await reposOp(body); pushState(); return json(res, 200, { ok: true }); }
       if (pathname === '/api/brutal-rules') {
         try { setBrutalRules(String(body.op), body); } catch (e) { throw httpError(400, e.message); }
         pushState();

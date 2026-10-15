@@ -6,12 +6,20 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { config } from './config.mjs';
+import { config, repoBySlug } from './config.mjs';
 import { kv } from './db.mjs';
 
-// Our /brutal-review command, read fresh at each launch so edits to it apply right away.
-const BRUTAL_SKILL = join(config.repos[0].path, 'apps/mobile_app/.claude/commands/brutal-review.md');
-const brutalSkill = () => { try { return readFileSync(BRUTAL_SKILL, 'utf8').trim(); } catch { return '(skill file missing: review for type safety, errors, crashes, security, performance, tests, a11y, logic in components, DRY, over-engineering, long functions, naming)'; } };
+// Our /brutal-review command, read fresh at each launch so edits to it apply right away: the PR's
+// own repo's command when it has one, else the mobile one.
+const BRUTAL_PATHS = ['.claude/commands/brutal-review.md', 'apps/mobile_app/.claude/commands/brutal-review.md'];
+function brutalSkill(slug) {
+  const repo = repoBySlug(slug);
+  const files = [...(repo ? BRUTAL_PATHS.map((p) => [repo, p]) : []), ...BRUTAL_PATHS.map((p) => [config.repos[0], p])];
+  for (const [r, p] of files) {
+    try { return { text: readFileSync(join(r.path, p), 'utf8').trim(), from: r === repo ? p : `${p} of ${r.slug}` }; } catch {}
+  }
+  return { text: '(skill file missing: review for type safety, errors, crashes, security, performance, tests, a11y, logic in components, DRY, over-engineering, long functions, naming)', from: 'fallback' };
+}
 
 // My own additions to /brutal-review, managed from the Brutal reviews page (this laptop's DB = mine).
 // They ADD checklist items; the shared command stays the reference for format and severities.
@@ -100,12 +108,12 @@ export const REVIEW_CHORE = {
   label: 'AI review (brouillon)',
   model: 'opus',
   effort: 'high',
-  prompt: (pr) => `You are running our /brutal-review on teammate PR #${pr.number} "${pr.title}" by @${pr.author}, checked out (detached) in this directory.
-Change set: \`git diff origin/${pr.base}...HEAD\`, held to AGENTS.md and apps/mobile_app/AGENTS.md (plus any feature AGENTS.md the diff touches).
+  prompt: (pr, skill = brutalSkill(pr.repo)) => `You are running our /brutal-review on teammate PR #${pr.number} "${pr.title}" by @${pr.author} in ${pr.repo}, checked out (detached) in this directory.
+Change set: \`git diff origin/${pr.base}...HEAD\`, held to the repo's AGENTS.md / CLAUDE.md files (root, the touched apps, any feature AGENTS.md the diff touches).
 
-This is the /brutal-review command (apps/mobile_app/.claude/commands/brutal-review.md), verbatim. Follow it TO THE LETTER — its checklist, its three severities, its output format and its tone. It is the authority: if anything below seems to conflict with it, the command wins.
+This is the /brutal-review command (${skill.from}), verbatim. Follow it TO THE LETTER — its checklist, its three severities, its output format and its tone. It is the authority: if anything below seems to conflict with it, the command wins.
 <brutal-review>
-${brutalSkill()}
+${skill.text}
 </brutal-review>${myRules()}
 
 Go through every item of its checklist${brutalRules().some((r) => r.on) ? ' and of my rules' : ''} against every changed file. Every finding is confirmed by reading the surrounding code — no speculation.

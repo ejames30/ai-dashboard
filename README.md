@@ -30,6 +30,17 @@ Jira: REST when a token is in the keychain (`ai-dashboard-jira`), otherwise a he
 
 Chores (`server/chores.mjs`), first match wins: conflicts → failing checks → unresolved comments → self review (Fable) → draft ready for review → start ticket. The modal lets me change model, effort and prompt before launching. **+ Prompt libre** starts a session in a fresh worktree on master.
 
+## Repos & radar scope
+
+`hivebrite-mobile` is always tracked (it carries the local stack). Add any other repo from the **Repos** page: `owner/repo` (default branch read from GitHub), clone path (default `~/HiveBrite/<repo>`), a **Cloner** button if it isn't on disk, and a **Radar** checkbox per repo. Saved in your profile (`repos`), applied live.
+
+The radar only reviews **new** ready PRs from teammates, in your repos with Radar on, and per person within their `radarRepos` from `team.json`:
+
+- Eric, Malek, Jérémie — any of your radar repos;
+- Thomas, Tobiasz — `Hivebrite/hivebrite-mobile` only.
+
+Turning the radar on for a repo (added, or re-checked) ignores its PRs already open — no backlog review. Each review uses the PR's own repo `/brutal-review` command (`.claude/commands/brutal-review.md` or `apps/mobile_app/…`), else the mobile one.
+
 ## Personal review rules
 
 Every review follows the shared `/brutal-review` command from the mobile repo, word for word. On top of it, each person adds **their own rules** from the **Brutal reviews** page (« Mes règles perso »): add, edit, turn on/off, delete. Active rules are appended to the review prompt as extra checklist items — same severities, same output format — for every review you run (draft, auto-posted, self review). They live in your local DB, so they're yours only.
@@ -68,7 +79,8 @@ Connector missing or « Needs authentication »: claude.ai → Settings → Conn
 | `autoReview` | `true` | the radar: post a brutal review on teammates' new PRs automatically (8h–20h). Every laptop posts its own, so a PR gets one review per teammate with it on |
 | `slack` | `true` | Slack triage every 10 min on weekdays |
 | `slackUserId` | — | your Slack ID (else the triage looks you up by name) |
-| `repoPath` | `~/HiveBrite/hivebrite-mobile` | where your clone lives |
+| `repos` | mobile only | tracked repos, from the Repos page: `[{ slug, path?, base?, radar }]` |
+| `repoPath` | `~/HiveBrite/hivebrite-mobile` | where your mobile clone lives |
 
 New teammate: add them to `team.json` (`login`, `name`, `firstName`), commit, they run `./setup.sh`.
 

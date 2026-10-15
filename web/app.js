@@ -56,6 +56,7 @@ const PAGES = {
   atelier: ['Atelier', 'Tes worktrees, tes agents, leurs PR et tickets — déplace, ajoute, relie'],
   sessions: ['Sessions', 'Chaque session Claude lancée depuis le dashboard'],
   stack: ['Stack local', 'Metro sur un checkout détaché, jamais ton clone principal'],
+  repos: ['Repos', 'Les repos que suit ton dashboard, et ceux que le radar scanne'],
   onboarding: ['Onboarding', 'Tout ce dont le dashboard a besoin sur ce Mac — vérifié pour de vrai, avec le correctif à un clic'],
 };
 const pageFromHash = () => (PAGES[location.hash.slice(1)] ? location.hash.slice(1) : 'home');
@@ -646,7 +647,7 @@ function renderRadar() {
   $('#page-radar').innerHTML = `
     <div class="hero radar"><div class="radar-ring ${a.enabled && a.active ? 'on' : ''}"><span></span></div>
       <div><h2>${!a.enabled ? 'Radar coupé' : a.active ? 'Radar actif' : `Radar en pause · reprend à ${a.hours[0]}h`} ${live.length ? `· <span style="color:var(--violet)">${live.length} review${live.length > 1 ? 's' : ''} en cours</span>` : ''}</h2>
-      <p>Surveille ${a.authors.map((x) => `<b>${esc(S.team.find((m) => m.login === x)?.name ?? x)}</b>`).join(', ')} sur hivebrite-mobile · check toutes les ${Math.round(a.everyMs / 60000)} min · ${a.maxConcurrent} en parallèle max</p>
+      <p>Surveille ${a.authors.map((x) => `<b>${esc(S.team.find((m) => m.login === x)?.name ?? x)}</b>${a.scopes?.[x] && a.scopes[x] !== 'all' ? ` <span class="faint">(${a.scopes[x].map((s) => esc(s.split('/')[1])).join(', ')})</span>` : ''}`).join(', ')} sur ${(a.repos ?? []).filter((r) => r.radar).map((r) => esc(r.slug.split('/')[1])).join(', ') || 'aucun repo'} · <a href="#repos">régler</a> · check toutes les ${Math.round(a.everyMs / 60000)} min · ${a.maxConcurrent} en parallèle max</p>
       ${a.enabled ? '' : '<p class="small">Coupé dans ton profil (<code>"autoReview": false</code> dans ~/.claude/pr-autoreview/profile.json) — enlève la ligne puis <code>./install.sh</code>.</p>'}
       <p class="small">Automatique de ${a.hours[0]}h à ${a.hours[1]}h · dernier check ${a.lastCheck ? `il y a ${ago(a.lastCheck)}` : '—'} · ${a.active ? `prochain dans <b id="radarNext" data-at="${a.lastCheck ? new Date(a.lastCheck).getTime() + a.everyMs : ''}">${next != null ? fmtMs(next) : '—'}</b>` : '<b>en pause</b> — check manuel possible'}</p></div>
       <span class="spacer"></span><button class="primary" id="radarCheck">◉ Checker maintenant</button></div>
@@ -1488,6 +1489,41 @@ function renderStackLog() {
   if (atBottom) el.scrollTop = el.scrollHeight;
 }
 
+// ---- repos ---------------------------------------------------------------------------
+const teamName = (login) => S.team.find((m) => m.login === login)?.name ?? login;
+function renderRepos() {
+  const repos = S.repos ?? [];
+  const a = S.autoReview ?? { scopes: {} };
+  const scopes = Object.entries(a.scopes ?? {});
+  const all = scopes.filter(([, s]) => s === 'all').map(([l]) => teamName(l));
+  const limited = scopes.filter(([, s]) => s !== 'all');
+  const el = $('#page-repos');
+  if (el.contains(document.activeElement) && document.activeElement.matches('input')) return;
+  el.innerHTML = `
+    <div class="panel"><h2>Repos suivis <span class="count">${repos.length}</span></h2><div class="feed">${repos.map((r) => `
+      <div class="repo-row">
+        <div class="ob-body"><div class="t"><a href="https://github.com/${esc(r.slug)}" target="_blank" rel="noopener">${esc(r.slug)}</a>${r.mobile ? ' <span class="badge info">stack local</span>' : ''}</div>
+          <div class="s">${esc(r.path.replace(/^\/Users\/[^/]+/, '~'))} · base <b>${esc(r.base)}</b> · ${r.open} PR ouvertes · ${r.sync?.error && (!r.sync.at || r.sync.errorAt > r.sync.at) ? `<span style="color:var(--rose)">⚠ ${esc(r.sync.error)}</span>` : r.sync?.at ? `sync il y a ${ago(r.sync.at)}` : 'pas encore synchronisé'}</div></div>
+        <div class="row-actions">
+          ${r.cloned ? '<span class="badge ok">cloné</span>' : r.cloning ? '<span class="badge live">clone en cours…</span>' : `<button class="chore" data-repoclone="${esc(r.slug)}" title="Sans clone : pas de review ni de session sur ce repo">Cloner</button>`}
+          <label class="repo-radar" title="Le radar poste une brutal review sur les nouvelles PR des coéquipiers dans ce repo"><input type="checkbox" data-reporadar="${esc(r.slug)}" ${r.radar ? 'checked' : ''}> Radar</label>
+          ${r.mobile ? '' : `<button class="ghost" data-reporm="${esc(r.slug)}" title="Ne plus suivre (le clone reste sur le disque)">✕</button>`}
+        </div></div>`).join('')}</div>
+      <div class="repo-add">
+        <input id="repoSlug" placeholder="owner/repo — ex. Hivebrite/alumni_connect" autocomplete="off">
+        <input id="repoPath" placeholder="chemin du clone (défaut : ~/HiveBrite/<repo>)" autocomplete="off">
+        <button class="primary" id="repoAdd">Ajouter</button>
+      </div></div>
+    <div class="panel"><h2>Ce que le radar scanne</h2><div class="ob-help">
+      <p>${a.enabled ? 'Le radar poste une brutal review sur chaque <b>nouvelle</b> PR prête d’un coéquipier, uniquement dans les repos cochés <b>Radar</b> ci-dessus.' : 'Le radar est <b>coupé</b> dans ton profil (<code>"autoReview": false</code>).'} À l’activation sur un repo, ses PR déjà ouvertes sont ignorées (pas de review du backlog).</p>
+      <ul>
+        ${all.length ? `<li><b>${all.map(esc).join(', ')}</b> — dans tous tes repos radar.</li>` : ''}
+        ${limited.map(([l, s]) => `<li><b>${esc(teamName(l))}</b> — uniquement ${s.map((x) => `<code>${esc(x)}</code>`).join(', ')}.</li>`).join('')}
+      </ul>
+      <p class="muted small">Ce périmètre par personne est commun à l’équipe : <code>radarRepos</code> dans <code>team.json</code>. Les repos et leur case Radar sont à toi : ils sont dans ton profil.</p>
+    </div></div>`;
+}
+
 // ---- onboarding ------------------------------------------------------------------------
 const OB_GROUPS = ['Toi', 'Outils', 'Connecteurs claude.ai', 'Code', 'Optionnel'];
 function renderOnboarding() {
@@ -1556,7 +1592,7 @@ function renderChrome() {
 // Which sources each page shows (mirrors SCOPES on the server) and how old each one is.
 const PAGE_SOURCES = {
   standup: ['github', 'jira'], mine: ['github'], ideas: [], atelier: ['github'], fleet: [], home: ['github', 'jira', 'slack'], tasks: ['github', 'jira'], jira: ['jira'], epics: ['jira'], reviews: ['github'], radar: ['github'],
-  brutal: ['github'], slack: ['slack'], sessions: [], usage: ['usage'], stack: [], data: ['usage'], onboarding: [],
+  brutal: ['github'], slack: ['slack'], sessions: [], usage: ['usage'], stack: [], data: ['usage'], onboarding: [], repos: ['github'],
 };
 const SOURCE_LABEL = { github: 'GitHub', jira: 'Jira', slack: 'Slack', usage: 'Transcripts' };
 const STALE_MS = { github: 10 * 60_000, jira: 45 * 60_000, slack: 60 * 60_000, usage: 15 * 60_000 };
@@ -1606,6 +1642,7 @@ const PAGE_FN = {
   brutal: [() => renderBrutal(), ['reviewHistory', 'brutalRules']], slack: [() => renderSlack(), ['slack']], sessions: [() => renderSessions(), ['sessions']],
   usage: [() => RENDER.usage(), []], stack: [() => renderStack(), ['stack', 'tasks', 'reviews']], data: [() => renderData(), ['events', 'db']],
   onboarding: [() => renderOnboarding(), ['onboarding', 'profile']],
+  repos: [() => renderRepos(), ['repos', 'autoReview', 'team']],
 };
 const stale = new Set(Object.keys(PAGE_FN));
 function renderCounts() {
@@ -1622,6 +1659,7 @@ function renderCounts() {
   n('#c-fleet', (S.fleet?.sessions ?? []).filter((x) => x.status === 'working' || x.status === 'input').length);
   n('#c-home', actionItems().filter((i) => i.w <= 1).length);
   n('#c-onboarding', S.onboarding?.missing ?? 0);
+  n('#c-repos', (S.repos ?? []).length);
   const live = S.sessions.filter((x) => x.chore === 'auto-review' && ACTIVE.includes(x.state));
   $('#radarDot').className = `dot ${live.length ? 'live' : S.autoReview?.enabled ? 'ok' : ''}`;
   if (S.stack) $('#stackDot').className = `dot ${S.stack.busy ? 'warn' : S.stack.running ? 'ok' : ''}`;
@@ -1680,6 +1718,8 @@ $('#choreForm').addEventListener('submit', async (e) => {
 document.addEventListener('change', async (e) => {
   const id = e.target.dataset?.brtoggle;
   if (id) await post('/api/brutal-rules', { op: 'toggle', id }).catch((err) => toast(err.message));
+  const rr = e.target.dataset?.reporadar;
+  if (rr) await post('/api/repos', { op: 'radar', slug: rr, on: e.target.checked }).then(() => toast(e.target.checked ? `Radar activé sur ${rr} (PR déjà ouvertes ignorées)` : `Radar coupé sur ${rr}`), (err) => toast(err.message));
 });
 document.addEventListener('click', async (e) => {
   const ed = e.target.closest('[data-bredit]');
@@ -1707,6 +1747,9 @@ document.addEventListener('click', async (e) => {
     if (b.dataset.stackBranch) { await post('/api/stack/switch', { branch: b.dataset.stackBranch }); location.hash = 'stack'; return; }
     if (b.dataset.stackPr) { await post('/api/stack/switch', { pr: b.dataset.stackPr }); location.hash = 'stack'; return; }
     if (b.id === 'customBtn') return openChore({ kind: 'custom', chore: 'custom' });
+    if (b.id === 'repoAdd') { const slug = $('#repoSlug').value.trim(); if (!slug) return toast('owner/repo d’abord'); b.disabled = true; try { await post('/api/repos', { op: 'add', slug, path: $('#repoPath').value.trim() }); $('#repoSlug').value = ''; $('#repoPath').value = ''; document.activeElement.blur(); toast('Repo ajouté ✓ — synchro GitHub en cours'); } finally { b.disabled = false; } return; }
+    if (b.dataset.repoclone) { await post('/api/repos', { op: 'clone', slug: b.dataset.repoclone }); return toast('Clone lancé — ça peut prendre quelques minutes'); }
+    if (b.dataset.reporm) { if (!confirm(`Ne plus suivre ${b.dataset.reporm} ? (le clone reste sur le disque)`)) return; await post('/api/repos', { op: 'remove', slug: b.dataset.reporm }); return toast('Repo retiré'); }
     if (b.id === 'brAdd') { const t = $('#brNew').value.trim(); if (!t) return toast('Écris la règle d’abord'); await post('/api/brutal-rules', { op: 'add', text: t }); $('#brNew').value = ''; $('#brNew').blur(); return toast('Règle ajoutée ✓ — prochaines reviews'); }
     if (b.dataset.brdel) { if (!confirm('Supprimer cette règle ?')) return; await post('/api/brutal-rules', { op: 'delete', id: b.dataset.brdel }); return; }
     if (b.id === 'obCheck') { await post('/api/onboarding/check'); return toast('Vérification en cours (~40 s, les connecteurs sont lents)'); }

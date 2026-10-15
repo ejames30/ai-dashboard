@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,6 +17,31 @@ const login = profile.login ?? ghLogin();
 const member = TEAM.find((m) => m.login.toLowerCase() === login?.toLowerCase()) ?? {};
 const teammates = TEAM.filter((m) => m !== member);
 
+// hivebrite-mobile is always there (first, with the local stack). Every other repo comes from
+// profile.repos — [{ slug, path?, base?, radar? }] — edited from the Repos page; an entry with
+// the mobile slug only overrides its path/radar.
+const MOBILE = 'Hivebrite/hivebrite-mobile';
+const defaultPath = (slug) => join(HOME, 'HiveBrite', slug.split('/')[1]);
+function buildRepos(list = []) {
+  const mobileEntry = list.find((r) => r.slug === MOBILE) ?? {};
+  const mobilePath = mobileEntry.path ?? profile.repoPath ?? defaultPath(MOBILE);
+  return [
+    {
+      slug: MOBILE, path: mobilePath, base: 'master', radar: mobileEntry.radar !== false,
+      // Where the local stack runs: a detached checkout, never the main clone, so
+      // switching what the simulator shows never touches a branch you're working on.
+      stack: {
+        path: `${mobilePath}-stack`,
+        cwd: 'apps/mobile_app',
+        install: ['pnpm', ['install', '--frozen-lockfile']],
+        start: ['pnpm', ['start']],
+        port: 8081,
+      },
+    },
+    ...list.filter((r) => r.slug !== MOBILE).map((r) => ({ slug: r.slug, path: r.path ?? defaultPath(r.slug), base: r.base ?? 'main', radar: r.radar !== false })),
+  ];
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 4317),
   me: login,
@@ -28,22 +53,7 @@ export const config = {
   // Every repo the cockpit tracks. `path` is the main clone; task worktrees live in
   // <path>/.claude/worktrees/<name> — inside the repo, so Claude already trusts them
   // and git already ignores them.
-  repos: [
-    {
-      slug: 'Hivebrite/hivebrite-mobile',
-      path: profile.repoPath ?? join(HOME, 'HiveBrite/hivebrite-mobile'),
-      base: 'master',
-      // Where the local stack runs: a detached checkout, never the main clone, so
-      // switching what the simulator shows never touches a branch you're working on.
-      stack: {
-        path: `${profile.repoPath ?? join(HOME, 'HiveBrite/hivebrite-mobile')}-stack`,
-        cwd: 'apps/mobile_app',
-        install: ['pnpm', ['install', '--frozen-lockfile']],
-        start: ['pnpm', ['start']],
-        port: 8081,
-      },
-    },
-  ],
+  repos: buildRepos(profile.repos),
 
   jira: {
     site: 'https://hivebrite.atlassian.net',
@@ -60,11 +70,14 @@ export const config = {
   // My teammates (team.json minus me): their PRs lead the "PR de l'équipe" page (drafts included).
   team: teammates.map((m) => ({ login: m.login, name: m.firstName })),
 
-  // New ready PRs from these teammates get a brutal review POSTED automatically (see autoreview.mjs).
+  // New ready PRs from these teammates get a brutal review POSTED automatically (see autoreview.mjs),
+  // in the repos whose radar is on — and, per teammate, only in their team.json "radarRepos"
+  // ("all", or a list of slugs).
   // On for everyone (profile "autoReview": false turns it off): each laptop posts its own review.
   autoReview: {
     enabled: profile.autoReview !== false,
     authors: teammates.map((m) => m.login),
+    scopes: Object.fromEntries(teammates.map((m) => [m.login, m.radarRepos ?? 'all'])),
     maxConcurrent: 3,
     hours: [8, 20], // automatic checks only from 8:00 to 20:00; outside, a manual check still works
   },
@@ -105,4 +118,19 @@ export const config = {
 };
 
 export const sizeOf = (lines) => config.sizes.find((s) => lines <= s.max).key;
+/** Rewrite the repo list in the profile and apply it live (config.repos is mutated in place). */
+export function saveRepos(list) {
+  const p = (() => { try { return JSON.parse(readFileSync(PROFILE_PATH, 'utf8')); } catch { return { login }; } })();
+  p.repos = list.map(({ slug, path, base, radar }) => ({ slug, ...(path && path !== defaultPath(slug) ? { path } : {}), ...(base ? { base } : {}), radar }));
+  writeFileSync(PROFILE_PATH, `${JSON.stringify(p, null, 2)}\n`);
+  profile.repos = p.repos;
+  config.repos.splice(0, config.repos.length, ...buildRepos(p.repos));
+}
+export const repoDefaultPath = defaultPath;
+export const MOBILE_REPO = MOBILE;
+/** Does the radar watch this PR? Repo radar on, author a teammate, repo in that teammate's scope. */
+export function radarWatches(pr) {
+  const scope = config.autoReview.scopes[pr.author];
+  return !!scope && !!repoBySlug(pr.repo)?.radar && (scope === 'all' || scope.includes(pr.repo));
+}
 export const repoBySlug = (slug) => config.repos.find((r) => r.slug === slug);
