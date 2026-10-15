@@ -61,9 +61,9 @@ export const config = {
   team: teammates.map((m) => ({ login: m.login, name: m.firstName })),
 
   // New ready PRs from these teammates get a brutal review POSTED automatically (see autoreview.mjs).
-  // Off unless the profile turns it on: with it on everywhere, each PR would get one review per laptop.
+  // On for everyone (profile "autoReview": false turns it off): each laptop posts its own review.
   autoReview: {
-    enabled: profile.autoReview === true,
+    enabled: profile.autoReview !== false,
     authors: teammates.map((m) => m.login),
     maxConcurrent: 3,
     hours: [8, 20], // automatic checks only from 8:00 to 20:00; outside, a manual check still works

@@ -109,7 +109,10 @@ node -e '
   p.login = login;
   if (email) p.email = email; else delete p.email;
   if (repo !== `${home}/HiveBrite/hivebrite-mobile`) p.repoPath = repo; else delete p.repoPath;
-  p.autoReview ??= false;
+  // v2: the radar is on for everyone; v1 setups wrote autoReview: false for all but Eric.
+  if (!p.setupVersion && p.autoReview === false) delete p.autoReview;
+  p.setupVersion = 2;
+  p.autoReview ??= true;
   p.slack ??= true;
   fs.writeFileSync(file, JSON.stringify(p, null, 2) + "\n");' "$PROFILE" "$MEMBER" "$EMAIL" "$REPO" "$HOME"
 ok "profil → ${PROFILE/#$HOME/~}"

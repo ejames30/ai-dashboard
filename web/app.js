@@ -633,6 +633,7 @@ function renderRadar() {
     <div class="hero radar"><div class="radar-ring ${a.enabled && a.active ? 'on' : ''}"><span></span></div>
       <div><h2>${!a.enabled ? 'Radar coupé' : a.active ? 'Radar actif' : `Radar en pause · reprend à ${a.hours[0]}h`} ${live.length ? `· <span style="color:var(--violet)">${live.length} review${live.length > 1 ? 's' : ''} en cours</span>` : ''}</h2>
       <p>Surveille ${a.authors.map((x) => `<b>${esc(S.team.find((m) => m.login === x)?.name ?? x)}</b>`).join(', ')} sur hivebrite-mobile · check toutes les ${Math.round(a.everyMs / 60000)} min · ${a.maxConcurrent} en parallèle max</p>
+      ${a.enabled ? '' : '<p class="small">Coupé dans ton profil (<code>"autoReview": false</code> dans ~/.claude/pr-autoreview/profile.json) — enlève la ligne puis <code>./install.sh</code>.</p>'}
       <p class="small">Automatique de ${a.hours[0]}h à ${a.hours[1]}h · dernier check ${a.lastCheck ? `il y a ${ago(a.lastCheck)}` : '—'} · ${a.active ? `prochain dans <b id="radarNext" data-at="${a.lastCheck ? new Date(a.lastCheck).getTime() + a.everyMs : ''}">${next != null ? fmtMs(next) : '—'}</b>` : '<b>en pause</b> — check manuel possible'}</p></div>
       <span class="spacer"></span><button class="primary" id="radarCheck">◉ Checker maintenant</button></div>
     <div class="kpis">
@@ -1505,7 +1506,7 @@ function renderOnboarding() {
     <div class="panel"><h2>Ce que chacun peut régler dans son profil</h2><div class="ob-help">
       <p>Ton profil est dans <code>~/.claude/pr-autoreview/profile.json</code> (écrit par <code>./setup.sh</code>, relançable à volonté). L’équipe est dans <code>team.json</code>, partagé dans le repo.</p>
       <ul>
-        <li><code>autoReview</code> — brutal review <b>postée automatiquement</b> sur les nouvelles PR des autres. Off par défaut : une seule personne de l’équipe doit l’activer, sinon chaque PR reçoit une review par laptop.</li>
+        <li><code>autoReview</code> — brutal review <b>postée automatiquement</b> sur les nouvelles PR des autres, de ${S.autoReview?.hours?.[0] ?? 8}h à ${S.autoReview?.hours?.[1] ?? 20}h. Activé par défaut (false pour le couper).</li>
         <li><code>slack</code> — tri Slack toutes les 10 min en semaine (false pour le couper).</li>
         <li><code>slackUserId</code> — ton ID Slack (sinon Claude le cherche par ton nom à chaque tri).</li>
         <li><code>email</code> — l’email de ton compte Atlassian, pour le token Jira.</li>

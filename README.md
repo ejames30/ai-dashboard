@@ -61,7 +61,7 @@ Connector missing or « Needs authentication »: claude.ai → Settings → Conn
 | --- | --- | --- |
 | `login` | from setup | your GitHub login (must be in `team.json`) |
 | `email` | from setup | your Atlassian email, for the Jira token |
-| `autoReview` | `false` | post brutal reviews on teammates' new PRs automatically. **Only one person should turn it on**, or every PR gets one review per laptop |
+| `autoReview` | `true` | the radar: post a brutal review on teammates' new PRs automatically (8h–20h). Every laptop posts its own, so a PR gets one review per teammate with it on |
 | `slack` | `true` | Slack triage every 10 min on weekdays |
 | `slackUserId` | — | your Slack ID (else the triage looks you up by name) |
 | `repoPath` | `~/HiveBrite/hivebrite-mobile` | where your clone lives |
