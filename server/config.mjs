@@ -11,6 +11,14 @@ const readJson = (path) => { try { return JSON.parse(readFileSync(path, 'utf8'))
 export const TEAM = readJson(new URL('../team.json', import.meta.url)).members;
 export const PROFILE_PATH = join(dataDir, 'profile.json');
 export const profile = readJson(PROFILE_PATH) ?? {};
+// v1 setup wrote "autoReview": false for everyone; the radar is now on by default. Migrated here at
+// start (not only in setup.sh) so a plain git pull + install.sh fixes it. An explicit false set
+// after that (setupVersion 2) is kept.
+if (profile.login && !profile.setupVersion) {
+  if (profile.autoReview === false) delete profile.autoReview;
+  profile.setupVersion = 2;
+  try { writeFileSync(PROFILE_PATH, `${JSON.stringify(profile, null, 2)}\n`); } catch {}
+}
 // No profile yet (setup.sh not run): guess who I am from gh, so the dashboard still starts.
 const ghLogin = () => { try { return execFileSync('gh', ['api', 'user', '--jq', '.login'], { encoding: 'utf8', timeout: 10_000 }).trim(); } catch { return null; } };
 const login = profile.login ?? ghLogin();
