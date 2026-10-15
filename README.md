@@ -30,6 +30,10 @@ Jira: REST when a token is in the keychain (`ai-dashboard-jira`), otherwise a he
 
 Chores (`server/chores.mjs`), first match wins: conflicts → failing checks → unresolved comments → self review (Fable) → draft ready for review → start ticket. The modal lets me change model, effort and prompt before launching. **+ Prompt libre** starts a session in a fresh worktree on master.
 
+## Personal review rules
+
+Every review follows the shared `/brutal-review` command from the mobile repo, word for word. On top of it, each person adds **their own rules** from the **Brutal reviews** page (« Mes règles perso »): add, edit, turn on/off, delete. Active rules are appended to the review prompt as extra checklist items — same severities, same output format — for every review you run (draft, auto-posted, self review). They live in your local DB, so they're yours only.
+
 ## Review safety
 
 A teammate's diff is untrusted. The review session runs in `dontAsk` mode with only `Read/Grep/Glob`, `git diff/log/show/blame`, `gh pr view/diff` — no write, no post. It ends with a JSON block; the server creates the pending review.

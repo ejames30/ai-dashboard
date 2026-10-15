@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AUTO_REVIEW_CHORE, SELF_REVIEW_CHORE, BATCH, CHORES, CUSTOM, EFFORTS, EPIC_PLAN, IDEA, MODELS, REVIEW_CHORE, STANDUP, choreByKey, nextChore } from './chores.mjs';
+import { brutalRules, setBrutalRules, AUTO_REVIEW_CHORE, SELF_REVIEW_CHORE, BATCH, CHORES, CUSTOM, EFFORTS, EPIC_PLAN, IDEA, MODELS, REVIEW_CHORE, STANDUP, choreByKey, nextChore } from './chores.mjs';
 import { config, repoBySlug, sizeOf } from './config.mjs';
 import { bump, db, kv, logEvent, update, version } from './db.mjs';
 import { autoReviewState, runAutoReview } from './autoreview.mjs';
@@ -147,6 +147,7 @@ async function state() {
     ideas: cached('ideas', ['ideas'], ideasState),
     graph: cached('graph', ['graph', 'worktrees'], graphState),
     fleet: cached('fleet', ['fleetLive'], () => fleetSnap),
+    brutalRules: cached('brutalRules', ['kv:brutalRules'], brutalRules),
     onboarding: cached('onboarding', ['kv:onboarding'], onboardingState),
     chores: CHORE_LIST,
     models: MODELS,
@@ -477,6 +478,11 @@ createServer(async (req, res) => {
       if (pathname === '/api/worktree/terminal') {
         if (!isWorktree(body.path)) throw httpError(400, 'unknown worktree');
         await openTerminalAt(body.path, body.claude ? 'claude' : null);
+        return json(res, 200, { ok: true });
+      }
+      if (pathname === '/api/brutal-rules') {
+        try { setBrutalRules(String(body.op), body); } catch (e) { throw httpError(400, e.message); }
+        pushState();
         return json(res, 200, { ok: true });
       }
       if (pathname === '/api/onboarding/check') { onboardingTick(); pushState(); return json(res, 202, { ok: true }); }

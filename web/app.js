@@ -476,7 +476,21 @@ RENDER.reviews = renderReviews;
 // ---- brutal reviews ----------------------------------------------------------------
 const sevPills = (c) => `<span class="sev"><span class="c ${c.critical ? '' : 'z'}">${c.critical} crit</span><span class="w ${c.warning ? '' : 'z'}">${c.warning} major</span><span class="s ${c.suggestion ? '' : 'z'}">${c.suggestion} impr</span></span>`;
 const SEV_LABEL = { critical: '🚨 Critical', warning: '⚠️ Major', suggestion: '💡 Improvement' };
+function renderBrutalRules() {
+  const el = $('#brutalRules');
+  if (el.contains(document.activeElement) && document.activeElement.matches('textarea')) return; // don't wipe a rule being typed
+  const rules = S.brutalRules ?? [];
+  el.innerHTML = `<div class="panel"><h2>⚡ Mes règles perso <span class="count">${rules.filter((r) => r.on).length}/${rules.length}</span><span class="spacer"></span><span class="faint small" style="text-transform:none;letter-spacing:0;font-weight:400">ajoutées à /brutal-review dans toutes tes reviews (brouillon, auto postée, self review) — rien que chez toi</span></h2>
+    <div class="feed">${rules.map((r) => `<div class="br-rule ${r.on ? '' : 'off'}">
+      <label class="br-on" title="${r.on ? 'Active' : 'Désactivée'}"><input type="checkbox" data-brtoggle="${esc(r.id)}" ${r.on ? 'checked' : ''}></label>
+      <div class="br-text" data-bredit="${esc(r.id)}" title="Cliquer pour modifier">${esc(r.text)}</div>
+      <div class="row-actions"><button class="ghost" data-bredit="${esc(r.id)}">✎</button><button class="ghost" data-brdel="${esc(r.id)}" title="Supprimer">✕</button></div></div>`).join('')
+      || '<div class="empty" style="padding:16px">Aucune règle. Ex. : « Tout nouveau texte affiché passe par i18n », « Pas de useEffect pour dériver un state », « Un écran = un test e2e ».</div>'}</div>
+    <div class="br-add"><textarea id="brNew" rows="2" placeholder="Nouvelle règle : ce que la review doit aussi vérifier, et pourquoi…"></textarea><button class="primary" id="brAdd">Ajouter</button></div></div>`;
+}
+
 function renderBrutal() {
+  renderBrutalRules();
   const all = S.reviewHistory ?? [];
   $('#c-brutal').textContent = all.filter((r) => new Date(r.started_at) >= startOfDay()).length || '';
   const authors = [...new Set(all.map((r) => r.author).filter(Boolean))].sort();
@@ -1589,7 +1603,7 @@ const PAGE_FN = {
   mine: [() => renderMine(), ['tasks', 'chores', 'reviewHistory']],
   tasks: [() => renderTasks(), ['tasks', 'chores', 'reviewHistory']], jira: [() => renderJira(), ['tasks', 'jira', 'reviewHistory']], epics: [() => renderEpics(), ['epics']],
   reviews: [() => renderReviews(), ['reviews', 'autoReview', 'team']], radar: [() => renderRadar(), ['autoReview', 'sessions', 'reviewHistory', 'events']],
-  brutal: [() => renderBrutal(), ['reviewHistory']], slack: [() => renderSlack(), ['slack']], sessions: [() => renderSessions(), ['sessions']],
+  brutal: [() => renderBrutal(), ['reviewHistory', 'brutalRules']], slack: [() => renderSlack(), ['slack']], sessions: [() => renderSessions(), ['sessions']],
   usage: [() => RENDER.usage(), []], stack: [() => renderStack(), ['stack', 'tasks', 'reviews']], data: [() => renderData(), ['events', 'db']],
   onboarding: [() => renderOnboarding(), ['onboarding', 'profile']],
 };
@@ -1663,7 +1677,18 @@ $('#choreForm').addEventListener('submit', async (e) => {
 });
 
 // ---- events ------------------------------------------------------------------------
+document.addEventListener('change', async (e) => {
+  const id = e.target.dataset?.brtoggle;
+  if (id) await post('/api/brutal-rules', { op: 'toggle', id }).catch((err) => toast(err.message));
+});
 document.addEventListener('click', async (e) => {
+  const ed = e.target.closest('[data-bredit]');
+  if (ed) {
+    const r = (S.brutalRules ?? []).find((x) => x.id === ed.dataset.bredit);
+    const text = r && prompt('Modifier la règle', r.text);
+    if (text != null && text.trim() && text.trim() !== r.text) await post('/api/brutal-rules', { op: 'edit', id: r.id, text }).catch((err) => toast(err.message));
+    return;
+  }
   const go = e.target.closest('[data-go]');
   if (go && !e.target.closest('button, a')) { location.hash = go.dataset.go; return; }
   const open = e.target.closest('[data-open-session]');
@@ -1682,6 +1707,8 @@ document.addEventListener('click', async (e) => {
     if (b.dataset.stackBranch) { await post('/api/stack/switch', { branch: b.dataset.stackBranch }); location.hash = 'stack'; return; }
     if (b.dataset.stackPr) { await post('/api/stack/switch', { pr: b.dataset.stackPr }); location.hash = 'stack'; return; }
     if (b.id === 'customBtn') return openChore({ kind: 'custom', chore: 'custom' });
+    if (b.id === 'brAdd') { const t = $('#brNew').value.trim(); if (!t) return toast('Écris la règle d’abord'); await post('/api/brutal-rules', { op: 'add', text: t }); $('#brNew').value = ''; $('#brNew').blur(); return toast('Règle ajoutée ✓ — prochaines reviews'); }
+    if (b.dataset.brdel) { if (!confirm('Supprimer cette règle ?')) return; await post('/api/brutal-rules', { op: 'delete', id: b.dataset.brdel }); return; }
     if (b.id === 'obCheck') { await post('/api/onboarding/check'); return toast('Vérification en cours (~40 s, les connecteurs sont lents)'); }
     if (b.dataset.obfix) { await post('/api/onboarding/fix', { key: b.dataset.obfix }); return toast('Ouvert dans un terminal — puis « Re-vérifier »'); }
     if (b.dataset.copy) { await navigator.clipboard.writeText(b.dataset.copy); return toast('Copié ✓'); }
